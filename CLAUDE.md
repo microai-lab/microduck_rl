@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-RL training environments for the MicroDuck — a ~800 g, ~25 cm tall bipedal
+RL training environments for Microduck — a ~800 g, ~25 cm tall bipedal
 robot with 14 Dynamixel XL330 servos — built on [mjlab](https://github.com/mujocolab/mjlab)
 (MuJoCo Warp) with PPO (rsl_rl). Policies are trained here at 50 Hz, exported to
 ONNX, and deployed by the runtime in the `pollen-robotics/microduck` repo on
@@ -80,7 +80,7 @@ Never launch a long run without one.
 ## Building a new env — the workflow
 
 1. **Pick the closest template** and build on it, don't start from scratch:
-   locomotion → the velocity recipe; episodic trick ending in a pose → sit /
+   locomotion → the velocity recipe; episodic trick ending in a pose →
    standup; commanded two-state → sitstand; dynamic maneuver → roulade
    (read its cfg docstring — it encodes a 5-run lesson arc). Building on
    `make_microduck_velocity*_env_cfg` keeps DR / obs / noise / delays in sync

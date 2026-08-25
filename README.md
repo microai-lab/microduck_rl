@@ -1,9 +1,9 @@
-# MicroDuck RL
+# Microduck RL
 
 <img width="2215" height="884" alt="image" src="https://github.com/user-attachments/assets/5db7cc83-b3ce-4f7c-83f0-0572a63baed7" />
 
 
-RL training environments for the [MicroDuck](https://github.com/pollen-robotics/microduck) —
+RL training environments for [Microduck](https://github.com/pollen-robotics/microduck) —
 a ~800 g, ~25 cm tall bipedal robot — built on
 [mjlab](https://github.com/mujocolab/mjlab) (MuJoCo Warp) with PPO.
 Policies are trained here at 50 Hz, exported to ONNX, and deployed on the real
@@ -181,7 +181,7 @@ joint-index mappings, reward sign conventions, and NaN guards.
 
 ## Related projects
 
-- [microduck](https://github.com/pollen-robotics/microduck) — the MicroDuck project home, including the onboard runtime that runs the exported policies
+- [microduck](https://github.com/pollen-robotics/microduck) — the Microduck project home, including the onboard runtime that runs the exported policies
 - [mjlab](https://github.com/mujocolab/mjlab) — the training framework (MuJoCo Warp + rsl_rl)
 - [BAM](https://github.com/Rhoban/bam) — better actuator models, by Rhoban
 
