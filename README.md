@@ -187,4 +187,4 @@ joint-index mappings, reward sign conventions, and NaN guards.
 
 ## License
 
-<!-- LICENSE — to be added before release. -->
+Apache 2.0 — see [LICENSE](LICENSE).
