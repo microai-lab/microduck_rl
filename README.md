@@ -187,4 +187,5 @@ joint-index mappings, reward sign conventions, and NaN guards.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+This project is licensed under the Apache 2.0 License. See the [LICENSE](LICENSE) file for details.
+Hardware design files are licensed under Creative Commons BY-SA-NC.
