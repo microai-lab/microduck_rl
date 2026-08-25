@@ -1,5 +1,8 @@
 # MicroDuck RL
 
+<img width="2215" height="884" alt="image" src="https://github.com/user-attachments/assets/5db7cc83-b3ce-4f7c-83f0-0572a63baed7" />
+
+
 RL training environments for the [MicroDuck](https://github.com/pollen-robotics/microduck) —
 a ~800 g, ~25 cm tall bipedal robot — built on
 [mjlab](https://github.com/mujocolab/mjlab) (MuJoCo Warp) with PPO.
