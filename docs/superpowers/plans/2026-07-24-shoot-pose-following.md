@@ -1,47 +1,47 @@
-# Tâche shoot par suivi de poses — Plan d'implémentation
+# Kick task by pose following — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ajouter une tâche RL `Mjlab-Shoot-Flat-MicroDuck` qui apprend un geste de shoot one-shot (jambe droite) par suivi d'une trajectoire de poses à 4 keyframes (STAND → PIED_ARRIÈRE → PIED_AVANT → STAND) interpolée par la phase.
+**Goal:** Add an RL task `Mjlab-Shoot-Flat-MicroDuck` that learns a one-shot kick gesture (right leg) by following a 4-keyframe pose trajectory (STAND → FOOT_BACK → FOOT_FORWARD → STAND) interpolated along the phase.
 
-**Architecture:** Même moule que la tâche `ground_pick` de cette branche. Une commande de phase (`GroundPickPhaseCommand`, `[cos,sin,0]`) pilote une cible articulaire interpolée entre 3 poses ; des rewards gaussien + L1 récompensent le suivi ; obs 61D unifiée pour déploiement dans un slot bouton du runtime. Aucune balle simulée.
+**Architecture:** The same mold as this branch's `ground_pick` task. A phase command (`GroundPickPhaseCommand`, `[cos,sin,0]`) drives a joint target interpolated between 3 poses; gaussian + L1 rewards pay for the tracking; a unified 61D obs for deployment in a runtime button slot. No simulated ball.
 
 **Tech Stack:** Python, PyTorch, mjlab 1.3.0, MuJoCo, uv, pytest.
 
 ## Global Constraints
 
-- Obs **61D unifiée** identique aux autres policies microduck (`[gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14), command(13)]`, head+body command zero-paddés). Ne pas casser cette forme.
-- Résolution des joints **PAR NOM** (`asset.find_joints([name])`), jamais par index en dur.
-- **14 joints** actifs (mouth exclu). Robot `MICRODUCK_WALK_ROBOT_CFG`.
-- Ne pas modifier le runtime Rust ni la classe de commande de façon cassante : le flag `randomize_phase` ajouté DOIT défaut à `True` pour préserver `ground_pick`.
-- Jambe **droite** frappe, **gauche** en appui.
-- Tests : `uv run --with pytest pytest tests/ -q`.
-- Convention commits : messages en français, style `feat:`/`docs:`/`test:`.
+- **Unified 61D obs**, identical to the other microduck policies (`[gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14), command(13)]`, head+body command zero-padded). Do not break this shape.
+- Joints resolved **BY NAME** (`asset.find_joints([name])`), never by hardcoded index.
+- **14 active joints** (mouth excluded). Robot `MICRODUCK_WALK_ROBOT_CFG`.
+- Do not modify the Rust runtime, and do not change the command class in a breaking way: the added `randomize_phase` flag MUST default to `True` to preserve `ground_pick`.
+- The **right** leg kicks, the **left** provides support.
+- Tests: `uv run --with pytest pytest tests/ -q`.
+- Commit convention: `feat:`/`docs:`/`test:` style messages.
 
 ---
 
 ## File Structure
 
-- `src/mjlab_microduck/tasks/mdp.py` — MODIFIER : ajouter `kick_pose_target` (pure), `_kick_pose_error`, `kick_pose_track`, `kick_pose_track_l1` ; ajouter le flag `randomize_phase` à `GroundPickPhaseCommand` / `GroundPickPhaseCommandCfg`.
-- `src/mjlab_microduck/tasks/microduck_shoot_env_cfg.py` — CRÉER : `make_microduck_shoot_env_cfg`, `MicroduckShootRlCfg`, `STAND_POSE`/`KICK_BACK_POSE`/`KICK_FWD_POSE`, timings.
-- `src/mjlab_microduck/tasks/__init__.py` — MODIFIER : import + `register_mjlab_task("Mjlab-Shoot-Flat-MicroDuck", …)`.
-- `tests/test_shoot.py` — CRÉER : tests des fonctions pures (`kick_pose_target`) + rewards via stub-env.
-- `tests/test_shoot_cfg.py` — CRÉER : test d'intégration (l'env se construit, bonne commande/rewards).
+- `src/mjlab_microduck/tasks/mdp.py` — MODIFY: add `kick_pose_target` (pure), `_kick_pose_error`, `kick_pose_track`, `kick_pose_track_l1`; add the `randomize_phase` flag to `GroundPickPhaseCommand` / `GroundPickPhaseCommandCfg`.
+- `src/mjlab_microduck/tasks/microduck_shoot_env_cfg.py` — CREATE: `make_microduck_shoot_env_cfg`, `MicroduckShootRlCfg`, `STAND_POSE`/`KICK_BACK_POSE`/`KICK_FWD_POSE`, timings.
+- `src/mjlab_microduck/tasks/__init__.py` — MODIFY: import + `register_mjlab_task("Mjlab-Shoot-Flat-MicroDuck", …)`.
+- `tests/test_shoot.py` — CREATE: tests of the pure functions (`kick_pose_target`) + the rewards via a stub env.
+- `tests/test_shoot_cfg.py` — CREATE: integration test (the env builds, with the right command/rewards).
 
 ---
 
-### Task 1: Flag `randomize_phase` sur la commande de phase
+### Task 1: `randomize_phase` flag on the phase command
 
 **Files:**
 - Modify: `src/mjlab_microduck/tasks/mdp.py:3618-3672` (`GroundPickPhaseCommand` + `GroundPickPhaseCommandCfg`)
 - Test: `tests/test_shoot.py`
 
 **Interfaces:**
-- Produces: `GroundPickPhaseCommandCfg(randomize_phase: bool = True, period: float = 4.0, …)` ; à l'exécution `reset()` met φ=0 quand `randomize_phase=False`, sinon `rand()`.
+- Produces: `GroundPickPhaseCommandCfg(randomize_phase: bool = True, period: float = 4.0, …)`; at runtime `reset()` sets φ=0 when `randomize_phase=False`, otherwise `rand()`.
 
-- [ ] **Step 1: Écrire le test qui échoue**
+- [ ] **Step 1: Write the failing test**
 
-Créer `tests/test_shoot.py` avec :
+Create `tests/test_shoot.py` with:
 
 ```python
 from mjlab_microduck.tasks.mdp import GroundPickPhaseCommandCfg
@@ -57,27 +57,27 @@ def test_phase_cmd_randomize_flag_settable_false():
     assert cfg.randomize_phase is False
 ```
 
-- [ ] **Step 2: Lancer le test, vérifier l'échec**
+- [ ] **Step 2: Run the test, verify it fails**
 
 Run: `uv run --with pytest pytest tests/test_shoot.py -q`
 Expected: FAIL — `TypeError: __init__() got an unexpected keyword argument 'randomize_phase'`.
 
-- [ ] **Step 3: Ajouter le champ au cfg + threading dans la classe**
+- [ ] **Step 3: Add the field to the cfg + thread it through the class**
 
-Dans `GroundPickPhaseCommandCfg` (dataclass, ~ligne 3667) ajouter le champ :
+In `GroundPickPhaseCommandCfg` (dataclass, ~line 3667) add the field:
 
 ```python
 @_dataclass(kw_only=True)
 class GroundPickPhaseCommandCfg(UniformVelocityCommandCfg):
     class_type: type = GroundPickPhaseCommand
     period: float = 4.0  # cycle length in seconds; sitstand uses 8.0
-    randomize_phase: bool = True  # False -> chaque épisode démarre à φ=0 (STAND)
+    randomize_phase: bool = True  # False -> every episode starts at φ=0 (STAND)
 
     def build(self, env: ManagerBasedRlEnv) -> "GroundPickPhaseCommand":
         return GroundPickPhaseCommand(self, env)
 ```
 
-Dans `GroundPickPhaseCommand.__init__` (~ligne 3634) lire le flag :
+In `GroundPickPhaseCommand.__init__` (~line 3634) read the flag:
 
 ```python
     def __init__(self, cfg, env: ManagerBasedRlEnv):
@@ -87,7 +87,7 @@ Dans `GroundPickPhaseCommand.__init__` (~ligne 3634) lire le flag :
         self._randomize_phase = bool(getattr(cfg, "randomize_phase", True))
 ```
 
-Dans `GroundPickPhaseCommand.reset` (~ligne 3649) respecter le flag :
+In `GroundPickPhaseCommand.reset` (~line 3649) honor the flag:
 
 ```python
     def reset(self, env_ids: torch.Tensor | None) -> dict:
@@ -99,7 +99,7 @@ Dans `GroundPickPhaseCommand.reset` (~ligne 3649) respecter le flag :
         return {}
 ```
 
-- [ ] **Step 4: Lancer le test, vérifier le succès**
+- [ ] **Step 4: Run the test, verify it passes**
 
 Run: `uv run --with pytest pytest tests/test_shoot.py -q`
 Expected: PASS (2 tests).
@@ -108,23 +108,23 @@ Expected: PASS (2 tests).
 
 ```bash
 git add src/mjlab_microduck/tasks/mdp.py tests/test_shoot.py
-git commit -m "feat: flag randomize_phase sur GroundPickPhaseCommand (défaut True)"
+git commit -m "feat: randomize_phase flag on GroundPickPhaseCommand (default True)"
 ```
 
 ---
 
-### Task 2: Fonction pure `kick_pose_target`
+### Task 2: Pure function `kick_pose_target`
 
 **Files:**
-- Modify: `src/mjlab_microduck/tasks/mdp.py` (ajouter près de `phase_pose_blend`, ~ligne 2062)
+- Modify: `src/mjlab_microduck/tasks/mdp.py` (add near `phase_pose_blend`, ~line 2062)
 - Test: `tests/test_shoot.py`
 
 **Interfaces:**
-- Produces: `kick_pose_target(phase: Tensor(B,), stand, back, forward, windup_end: float, kick_end: float, return_end: float) -> Tensor(B,k)`. `stand/back/forward` sont des tenseurs `(k,)` ou `(1,k)`. Segments : [0,windup_end) STAND→BACK, [windup_end,kick_end) BACK→FORWARD, [kick_end,return_end) FORWARD→STAND, [return_end,1) STAND.
+- Produces: `kick_pose_target(phase: Tensor(B,), stand, back, forward, windup_end: float, kick_end: float, return_end: float) -> Tensor(B,k)`. `stand/back/forward` are `(k,)` or `(1,k)` tensors. Segments: [0,windup_end) STAND→BACK, [windup_end,kick_end) BACK→FORWARD, [kick_end,return_end) FORWARD→STAND, [return_end,1) STAND.
 
-- [ ] **Step 1: Écrire les tests qui échouent**
+- [ ] **Step 1: Write the failing tests**
 
-Ajouter à `tests/test_shoot.py` :
+Add to `tests/test_shoot.py`:
 
 ```python
 import torch
@@ -141,37 +141,37 @@ def _t(phase):
 
 
 def test_kick_target_keypoints():
-    assert torch.allclose(_t(0.0), STAND)          # début: STAND
-    assert torch.allclose(_t(W), BACK)             # fin armement: BACK
-    assert torch.allclose(_t(K), FWD)              # fin frappe: FORWARD
-    assert torch.allclose(_t(R), STAND)            # fin retour: STAND
-    assert torch.allclose(_t(0.9), STAND)          # repos: STAND
+    assert torch.allclose(_t(0.0), STAND)          # start: STAND
+    assert torch.allclose(_t(W), BACK)             # end of wind-up: BACK
+    assert torch.allclose(_t(K), FWD)              # end of strike: FORWARD
+    assert torch.allclose(_t(R), STAND)            # end of return: STAND
+    assert torch.allclose(_t(0.9), STAND)          # rest: STAND
 
 
 def test_kick_target_midsegments():
-    assert torch.allclose(_t(W / 2), 0.5 * BACK)                    # mi-armement
-    assert torch.allclose(_t((W + K) / 2), 0.5 * (BACK + FWD))      # mi-frappe
-    assert torch.allclose(_t((K + R) / 2), 0.5 * FWD)              # mi-retour
+    assert torch.allclose(_t(W / 2), 0.5 * BACK)                    # mid wind-up
+    assert torch.allclose(_t((W + K) / 2), 0.5 * (BACK + FWD))      # mid strike
+    assert torch.allclose(_t((K + R) / 2), 0.5 * FWD)              # mid return
 
 
 def test_kick_target_batch_shape():
     phase = torch.linspace(0.0, 1.0, 50)
     out = kick_pose_target(phase, STAND, BACK, FWD, W, K, R)
     assert out.shape == (50, 2)
-    # chaque composante reste dans l'enveloppe des 3 poses
+    # each component stays within the envelope of the 3 poses
     lo = torch.minimum(torch.minimum(STAND, BACK), FWD)
     hi = torch.maximum(torch.maximum(STAND, BACK), FWD)
     assert (out >= lo - 1e-6).all() and (out <= hi + 1e-6).all()
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [ ] **Step 2: Run, verify it fails**
 
 Run: `uv run --with pytest pytest tests/test_shoot.py -q`
 Expected: FAIL — `ImportError: cannot import name 'kick_pose_target'`.
 
-- [ ] **Step 3: Implémenter la fonction pure**
+- [ ] **Step 3: Implement the pure function**
 
-Ajouter dans `mdp.py` juste après `phase_pose_blend` (~ligne 2062) :
+Add to `mdp.py` just after `phase_pose_blend` (~line 2062):
 
 ```python
 def kick_pose_target(
@@ -183,14 +183,14 @@ def kick_pose_target(
     kick_end: float,
     return_end: float,
 ) -> torch.Tensor:
-    """Cible articulaire interpolée d'un geste de shoot à 4 keyframes.
+    """Interpolated joint target for a 4-keyframe kick gesture.
 
-    phase (B,) ∈ [0,1). stand/back/forward (k,) ou (1,k). Retour (B,k).
+    phase (B,) ∈ [0,1). stand/back/forward (k,) or (1,k). Returns (B,k).
 
-    [0, windup_end)        STAND   -> BACK     (armement)
-    [windup_end, kick_end) BACK    -> FORWARD  (frappe sèche)
-    [kick_end, return_end) FORWARD -> STAND    (retour)
-    [return_end, 1.0)      STAND             (repos)
+    [0, windup_end)        STAND   -> BACK     (wind-up)
+    [windup_end, kick_end) BACK    -> FORWARD  (sharp strike)
+    [kick_end, return_end) FORWARD -> STAND    (return)
+    [return_end, 1.0)      STAND             (rest)
     """
     p = phase.unsqueeze(-1)  # (B,1)
 
@@ -203,7 +203,7 @@ def kick_pose_target(
 
     seg1 = interp(stand, back, s1)
     seg2 = interp(back, forward, s2)
-    seg3 = interp(forward, stand, s3)  # à s3=1 (phase>=return_end) => STAND
+    seg3 = interp(forward, stand, s3)  # at s3=1 (phase>=return_end) => STAND
 
     out = seg1
     out = torch.where(p >= windup_end, seg2, out)
@@ -211,36 +211,36 @@ def kick_pose_target(
     return out
 ```
 
-- [ ] **Step 4: Lancer, vérifier le succès**
+- [ ] **Step 4: Run, verify it passes**
 
 Run: `uv run --with pytest pytest tests/test_shoot.py -q`
-Expected: PASS (tous les tests kick_target).
+Expected: PASS (all the kick_target tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/mjlab_microduck/tasks/mdp.py tests/test_shoot.py
-git commit -m "feat: kick_pose_target — cible interpolée du geste de shoot (4 keyframes)"
+git commit -m "feat: kick_pose_target - interpolated target of the kick gesture (4 keyframes)"
 ```
 
 ---
 
-### Task 3: Rewards de suivi `kick_pose_track` / `kick_pose_track_l1`
+### Task 3: Tracking rewards `kick_pose_track` / `kick_pose_track_l1`
 
 **Files:**
-- Modify: `src/mjlab_microduck/tasks/mdp.py` (ajouter après `kick_pose_target`)
+- Modify: `src/mjlab_microduck/tasks/mdp.py` (add after `kick_pose_target`)
 - Test: `tests/test_shoot.py`
 
 **Interfaces:**
 - Consumes: `kick_pose_target` (Task 2).
 - Produces:
-  - `kick_pose_track(env, command_name="twist", stand_pose=None, back_pose=None, forward_pose=None, std=0.4, windup_end=0.35, kick_end=0.45, return_end=0.75, asset_cfg=_DEFAULT_ASSET_CFG) -> Tensor(B,)` — gaussienne `exp(-((q-cible)/std)²).mean`.
-  - `kick_pose_track_l1(env, …mêmes args sauf std) -> Tensor(B,)` — `-(|q-cible|).mean`.
+  - `kick_pose_track(env, command_name="twist", stand_pose=None, back_pose=None, forward_pose=None, std=0.4, windup_end=0.35, kick_end=0.45, return_end=0.75, asset_cfg=_DEFAULT_ASSET_CFG) -> Tensor(B,)` — gaussian `exp(-((q-target)/std)²).mean`.
+  - `kick_pose_track_l1(env, …same args without std) -> Tensor(B,)` — `-(|q-target|).mean`.
   - Helper `_kick_pose_error(env, asset_cfg, command_name, stand_pose, back_pose, forward_pose, windup_end, kick_end, return_end) -> (cur, target)`.
 
-- [ ] **Step 1: Écrire le test qui échoue (stub-env)**
+- [ ] **Step 1: Write the failing test (stub env)**
 
-Ajouter à `tests/test_shoot.py` :
+Add to `tests/test_shoot.py`:
 
 ```python
 from mjlab_microduck.tasks.mdp import kick_pose_track, kick_pose_track_l1
@@ -294,14 +294,14 @@ class _FakeEnv:
 
 
 def test_kick_track_perfect_at_stand_phase():
-    # phase=0 -> cible STAND=[0,0] ; joint_pos exactement STAND -> reward ~1
+    # phase=0 -> target STAND=[0,0]; joint_pos exactly STAND -> reward ~1
     env = _FakeEnv(torch.tensor([[0.0, 0.0]]), torch.tensor([0.0]))
     r = kick_pose_track(env, stand_pose=STAND_D, back_pose=BACK_D, forward_pose=FWD_D)
     assert torch.allclose(r, torch.tensor([1.0]), atol=1e-4)
 
 
 def test_kick_track_lower_when_off_target():
-    # phase=0.45 (kick_end) -> cible FORWARD=[-1,2] ; joint_pos=STAND -> reward < 0.5
+    # phase=0.45 (kick_end) -> target FORWARD=[-1,2]; joint_pos=STAND -> reward < 0.5
     env = _FakeEnv(torch.tensor([[0.0, 0.0]]), torch.tensor([0.45]))
     r = kick_pose_track(env, stand_pose=STAND_D, back_pose=BACK_D, forward_pose=FWD_D)
     assert (r < 0.5).all()
@@ -313,14 +313,14 @@ def test_kick_track_l1_zero_when_perfect():
     assert torch.allclose(r, torch.tensor([0.0]), atol=1e-6)
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [ ] **Step 2: Run, verify it fails**
 
 Run: `uv run --with pytest pytest tests/test_shoot.py -q`
 Expected: FAIL — `ImportError: cannot import name 'kick_pose_track'`.
 
-- [ ] **Step 3: Implémenter helper + rewards**
+- [ ] **Step 3: Implement the helper + rewards**
 
-Ajouter dans `mdp.py` après `kick_pose_target` :
+Add to `mdp.py` after `kick_pose_target`:
 
 ```python
 def _kick_pose_error(
@@ -334,10 +334,10 @@ def _kick_pose_error(
     kick_end: float,
     return_end: float,
 ):
-    """(cur, target) pour le geste de shoot, joints résolus PAR NOM.
+    """(cur, target) for the kick gesture, joints resolved BY NAME.
 
-    Les 3 poses partagent les mêmes clés (14 joints). L'ordre des noms est
-    donné par `stand_pose`.
+    The 3 poses share the same keys (14 joints). The name ordering comes from
+    `stand_pose`.
     """
     if not stand_pose:
         raise ValueError("_kick_pose_error requires a non-empty stand_pose dict")
@@ -371,10 +371,10 @@ def kick_pose_track(
     return_end: float = 0.75,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Gaussienne sur la pose articulaire vs cible interpolée du shoot.
+    """Gaussian on joint pose vs the interpolated kick target.
 
-    Reward directif et symétrique : chaque phase impose la config articulaire
-    exacte. Résolution PAR NOM.
+    A directive, symmetric reward: each phase prescribes the exact joint
+    configuration. Resolution BY NAME.
     """
     cur, target = _kick_pose_error(
         env, asset_cfg, command_name, stand_pose or {}, back_pose or {},
@@ -394,7 +394,7 @@ def kick_pose_track_l1(
     return_end: float = 0.75,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Bootstrap L1 vers la cible interpolée (gradient constant, pénalité<=0)."""
+    """L1 bootstrap toward the interpolated target (constant gradient, penalty<=0)."""
     cur, target = _kick_pose_error(
         env, asset_cfg, command_name, stand_pose or {}, back_pose or {},
         forward_pose or {}, windup_end, kick_end, return_end,
@@ -402,16 +402,16 @@ def kick_pose_track_l1(
     return -(cur - target).abs().mean(dim=-1)
 ```
 
-- [ ] **Step 4: Lancer, vérifier le succès**
+- [ ] **Step 4: Run, verify it passes**
 
 Run: `uv run --with pytest pytest tests/test_shoot.py -q`
-Expected: PASS (tous les tests, y compris les 3 nouveaux).
+Expected: PASS (all tests, including the 3 new ones).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/mjlab_microduck/tasks/mdp.py tests/test_shoot.py
-git commit -m "feat: rewards kick_pose_track + kick_pose_track_l1 (suivi du geste de shoot)"
+git commit -m "feat: kick_pose_track + kick_pose_track_l1 rewards (kick gesture tracking)"
 ```
 
 ---
@@ -423,34 +423,34 @@ git commit -m "feat: rewards kick_pose_track + kick_pose_track_l1 (suivi du gest
 - Test: (via Task 5)
 
 **Interfaces:**
-- Consumes: `kick_pose_track`, `kick_pose_track_l1` (Task 3) ; `GroundPickPhaseCommandCfg(randomize_phase=…)` (Task 1) ; `feet_grounded_reward`, `feet_flat_penalty`, `neck_action_rate_l2`, `joint_torques_l2`, `zero_command_padding`, `robot_state_is_nan`, DR events (existants dans `mdp.py`).
-- Produces: `make_microduck_shoot_env_cfg(play=False, rough=False) -> ManagerBasedRlEnvCfg` ; `MicroduckShootRlCfg` ; constantes `SHOOT_PERIOD`, `WINDUP_END`, `KICK_END`, `RETURN_END`, `STAND_POSE`, `KICK_BACK_POSE`, `KICK_FWD_POSE`.
+- Consumes: `kick_pose_track`, `kick_pose_track_l1` (Task 3); `GroundPickPhaseCommandCfg(randomize_phase=…)` (Task 1); `feet_grounded_reward`, `feet_flat_penalty`, `neck_action_rate_l2`, `joint_torques_l2`, `zero_command_padding`, `robot_state_is_nan`, and the DR events (already in `mdp.py`).
+- Produces: `make_microduck_shoot_env_cfg(play=False, rough=False) -> ManagerBasedRlEnvCfg`; `MicroduckShootRlCfg`; the constants `SHOOT_PERIOD`, `WINDUP_END`, `KICK_END`, `RETURN_END`, `STAND_POSE`, `KICK_BACK_POSE`, `KICK_FWD_POSE`.
 
-- [ ] **Step 1: Partir du fichier ground_pick comme base**
+- [ ] **Step 1: Start from the ground_pick file as a base**
 
 ```bash
 cp src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py \
    src/mjlab_microduck/tasks/microduck_shoot_env_cfg.py
 ```
 
-Ce fichier fournit déjà TOUT le boilerplate sim2real à conserver tel quel : DR (CoM, head CoM, mass/inertia, friction BAM, armature, IMU misalignment obs-level, encoder-bias, pushes), le bloc obs 61D (`del base_lin_vel` actor, critic base_lin_vel, suppression `foot_height`/`height_scan`, delays/noise, `head_command`/`body_command` zero-padding), la terminaison `nan_state`, les events `expand_bam_friction_fields` / `reset_action_history`, le curriculum action_rate/CoM. On ne modifie que : robot cfg, capteurs, commande, et le bloc rewards.
+That file already provides ALL the sim2real boilerplate to keep as-is: the DR (CoM, head CoM, mass/inertia, BAM friction, armature, obs-level IMU misalignment, encoder bias, pushes), the 61D obs block (`del base_lin_vel` on the actor, critic base_lin_vel, removal of `foot_height`/`height_scan`, delays/noise, `head_command`/`body_command` zero-padding), the `nan_state` termination, the `expand_bam_friction_fields` / `reset_action_history` events, and the action_rate/CoM curriculum. We modify only: the robot cfg, the sensors, the command, and the rewards block.
 
-- [ ] **Step 2: Adapter l'en-tête, le nom de fonction et les constantes**
+- [ ] **Step 2: Adapt the header, the function name and the constants**
 
-Remplacer le docstring de tête par une description shoot, et juste avant `def make_microduck_ground_pick_env_cfg`, ajouter les constantes + poses (placeholders — à remplacer par lecture `read_pose.py`). Renommer la fonction en `make_microduck_shoot_env_cfg`.
+Replace the top docstring with a kick description, and just before `def make_microduck_ground_pick_env_cfg`, add the constants + poses (placeholders — to be replaced with a `read_pose.py` reading). Rename the function to `make_microduck_shoot_env_cfg`.
 
 ```python
-# ── Timings du geste (phase normalisée [0,1)) ────────────────────────────────
-SHOOT_PERIOD = 2.5   # s — durée d'un cycle (doit matcher --ground-pick-period au déploiement)
+# ── Gesture timings (normalized phase [0,1)) ─────────────────────────────────
+SHOOT_PERIOD = 2.5   # s — cycle duration (must match --ground-pick-period at deployment)
 WINDUP_END = 0.35    # STAND -> BACK
-KICK_END = 0.45      # BACK -> FORWARD (segment court = frappe sèche)
-RETURN_END = 0.75    # FORWARD -> STAND, puis repos jusqu'à 1.0
+KICK_END = 0.45      # BACK -> FORWARD (short segment = sharp strike)
+RETURN_END = 0.75    # FORWARD -> STAND, then rest until 1.0
 
-# ── Poses (rad, 14 joints, mouth exclu) ──────────────────────────────────────
-# Convention: jambe droite frappe (hanche/genou droit actifs), gauche en appui.
-# STAND_POSE = pose HOME du sim (HOME_FRAME / default_joint_pos) pour que φ=0
-# coïncide avec la config de reset (invariant randomize_phase=False). BACK/FWD
-# sont des PLACEHOLDERS jambe droite, à affiner via read_pose.py.
+# ── Poses (rad, 14 joints, mouth excluded) ───────────────────────────────────
+# Convention: the right leg kicks (right hip/knee active), the left provides support.
+# STAND_POSE = the sim's HOME pose (HOME_FRAME / default_joint_pos) so that φ=0
+# coincides with the reset configuration (the randomize_phase=False invariant).
+# BACK/FWD are right-leg PLACEHOLDERS, to be refined via read_pose.py.
 STAND_POSE = {
     "left_hip_yaw": 0.0, "left_hip_roll": -0.0873, "left_hip_pitch": -0.4579,
     "left_knee": -0.0049, "left_ankle": 0.4530,
@@ -458,13 +458,13 @@ STAND_POSE = {
     "right_hip_yaw": 0.0, "right_hip_roll": 0.0873, "right_hip_pitch": 0.4579,
     "right_knee": 0.0049, "right_ankle": -0.4530,
 }
-KICK_BACK_POSE = {  # armement: hanche droite en extension arrière + genou fléchi
+KICK_BACK_POSE = {  # wind-up: right hip in backward extension + knee flexed
     **STAND_POSE,
     "right_hip_pitch": -0.6,
     "right_knee": 0.8,
     "right_ankle": -0.2,
 }
-KICK_FWD_POSE = {  # frappe: hanche droite fléchie avant + genou tendu
+KICK_FWD_POSE = {  # strike: right hip flexed forward + knee extended
     **STAND_POSE,
     "right_hip_pitch": 0.7,
     "right_knee": -0.1,
@@ -472,25 +472,25 @@ KICK_FWD_POSE = {  # frappe: hanche droite fléchie avant + genou tendu
 }
 ```
 
-> NOTE au releveur de poses : remplacer ces valeurs par des lectures `read_pose.py` (couple coupé, robot posé à la main dans chaque position). Garder les 14 clés identiques dans les 3 dicts.
+> NOTE for whoever records the poses: replace these values with `read_pose.py` readings (torque off, robot placed by hand in each position). Keep the same 14 keys in all 3 dicts.
 
-- [ ] **Step 3: Robot cfg et import**
+- [ ] **Step 3: Robot cfg and import**
 
-Dans les imports, remplacer `MICRODUCK_GROUND_PICK_ROBOT_CFG` par `MICRODUCK_WALK_ROBOT_CFG` :
+In the imports, replace `MICRODUCK_GROUND_PICK_ROBOT_CFG` with `MICRODUCK_WALK_ROBOT_CFG`:
 
 ```python
 from mjlab_microduck.robot.microduck_constants import MICRODUCK_WALK_ROBOT_CFG
 ```
 
-Dans la fonction, la ligne d'entités :
+In the function, the entities line:
 
 ```python
     cfg.scene.entities = {"robot": MICRODUCK_WALK_ROBOT_CFG}
 ```
 
-- [ ] **Step 4: Capteurs — garder self_collision, remplacer les capteurs pied**
+- [ ] **Step 4: Sensors — keep self_collision, replace the foot sensors**
 
-Remplacer la définition du capteur `feet_ground_contact` (2 pieds) par un capteur **pied gauche seul** (appui), et SUPPRIMER le capteur `head_impact_cfg` (inutile ici). Le capteur `self_collision_cfg` reste.
+Replace the `feet_ground_contact` sensor definition (2 feet) with a **left-foot-only** sensor (the support foot), and DELETE the `head_impact_cfg` sensor (useless here). The `self_collision_cfg` sensor stays.
 
 ```python
     left_foot_ground_cfg = ContactSensorCfg(
@@ -508,17 +508,17 @@ Remplacer la définition du capteur `feet_ground_contact` (2 pieds) par un capte
     )
 ```
 
-Et la ligne des capteurs de scène :
+And the scene sensors line:
 
 ```python
     cfg.scene.sensors = (left_foot_ground_cfg, self_collision_cfg)
 ```
 
-Supprimer la définition de `head_impact_cfg` et toute référence (le reward `head_impact_penalty` est retiré au Step 6).
+Delete the `head_impact_cfg` definition and every reference to it (the `head_impact_penalty` reward is removed in Step 6).
 
-- [ ] **Step 5: Commande de phase (randomize_phase=False, période shoot)**
+- [ ] **Step 5: Phase command (randomize_phase=False, kick period)**
 
-Remplacer le bloc commande (celui qui crée `GroundPickPhaseCommandCfg`) par :
+Replace the command block (the one that creates `GroundPickPhaseCommandCfg`) with:
 
 ```python
     command: UniformVelocityCommandCfg = cfg.commands["twist"]
@@ -531,12 +531,12 @@ Remplacer le bloc commande (celui qui crée `GroundPickPhaseCommandCfg`) par :
     cfg.commands["twist"].randomize_phase = False
 ```
 
-- [ ] **Step 6: Rewards — retirer ground_pick, ajouter shoot**
+- [ ] **Step 6: Rewards — remove ground_pick, add the kick**
 
-Supprimer les rewards spécifiques ground_pick : `mouth_ground_proximity`, `mouth_perpendicular_to_ground`, `ground_pick_return_pose_legs`, `ground_pick_return_pose_neck`, `feet_grounded` (les 2 pieds), `head_impact_penalty`. Remplacer par le bloc shoot :
+Delete the ground_pick-specific rewards: `mouth_ground_proximity`, `mouth_perpendicular_to_ground`, `ground_pick_return_pose_legs`, `ground_pick_return_pose_neck`, `feet_grounded` (both feet), `head_impact_penalty`. Replace them with the kick block:
 
 ```python
-    # ── Objectif : suivi de la pose interpolée du shoot ───────────────────────
+    # ── Objective: follow the interpolated kick pose ──────────────────────────
     _pose_params = {
         "command_name": "twist",
         "stand_pose": STAND_POSE,
@@ -557,21 +557,21 @@ Supprimer les rewards spécifiques ground_pick : `mouth_ground_proximity`, `mout
         params=dict(_pose_params),
     )
 
-    # ── Équilibre / appui (jambe unique) ──────────────────────────────────────
+    # ── Balance / support (single leg) ────────────────────────────────────────
     cfg.rewards["upright"].params["asset_cfg"].body_names = ("trunk_base",)
     cfg.rewards["upright"].weight = 2.0
     cfg.rewards["body_ang_vel"].params["asset_cfg"].body_names = ("trunk_base",)
     cfg.rewards["body_ang_vel"].weight = -0.05
 
-    # Pied GAUCHE planté (appui). feet_grounded_reward avec un capteur mono-pied
-    # -> found ∈ {0,1} -> reward ∈ {0,0.5} ; poids 6.0 => contribution max ~3.0.
+    # LEFT foot planted (support). feet_grounded_reward with a single-foot sensor
+    # -> found ∈ {0,1} -> reward ∈ {0,0.5}; weight 6.0 => max contribution ~3.0.
     cfg.rewards["support_foot_grounded"] = RewardTermCfg(
         func=microduck_mdp.feet_grounded_reward,
         weight=6.0,
         params={"sensor_name": left_foot_ground_cfg.name},
     )
 
-    # Pied gauche à plat.
+    # Left foot flat.
     cfg.rewards["feet_flat_left"] = RewardTermCfg(
         func=microduck_mdp.feet_flat_penalty,
         weight=-1.0,
@@ -585,9 +585,9 @@ Supprimer les rewards spécifiques ground_pick : `mouth_ground_proximity`, `mout
     )
 ```
 
-- [ ] **Step 7: Régularisation allégée (laisser passer le snap)**
+- [ ] **Step 7: Lighter regularization (let the snap through)**
 
-Le fichier ground_pick met `action_rate_l2=-2.0`, `neck_action_rate_l2=-1.0`, `joint_torques_l2=-5e-3` + un curriculum action_rate qui finit à -2.0. Pour le shoot on allège. Remplacer ces 3 blocs par :
+The ground_pick file sets `action_rate_l2=-2.0`, `neck_action_rate_l2=-1.0`, `joint_torques_l2=-5e-3` plus an action_rate curriculum that ends at -2.0. For the kick we lighten it. Replace those 3 blocks with:
 
 ```python
     cfg.rewards["action_rate_l2"] = RewardTermCfg(
@@ -601,7 +601,7 @@ Le fichier ground_pick met `action_rate_l2=-2.0`, `neck_action_rate_l2=-1.0`, `j
     )
 ```
 
-Et alléger le curriculum action_rate (garder la structure, viser -0.5) :
+And lighten the action_rate curriculum (keep the structure, target -0.5):
 
 ```python
     cfg.curriculum["action_rate_weight"] = CurriculumTermCfg(
@@ -617,26 +617,26 @@ Et alléger le curriculum action_rate (garder la structure, viser -0.5) :
     )
 ```
 
-- [ ] **Step 8: Reset — hauteur de station debout**
+- [ ] **Step 8: Reset — standing stance height**
 
-Garder la **hauteur debout** `(0.12, 0.13)` — c'est la valeur de l'env velocity
-(marche) ET de ground_pick. ⚠️ Ce n'est PAS un offset additif « station accroupie » :
-le `pos` racine par défaut de `InitialStateCfg` est (0,0,0), donc la hauteur de reset
-est z ∈ [0.12, 0.13] m **absolue** = debout (aucune chute). Vérifier/mettre :
+Keep the **standing height** `(0.12, 0.13)` — that is the value used by the velocity
+(walking) env AND by ground_pick. ⚠️ This is NOT an additive "crouched stance" offset:
+the default root `pos` of `InitialStateCfg` is (0,0,0), so the reset height is
+z ∈ [0.12, 0.13] m **absolute** = standing (no fall). Check/set:
 
 ```python
     cfg.events["reset_base"].params["pose_range"]["z"] = (0.12, 0.13)
 ```
 
-(Ne PAS injecter de vitesse d'entrée — c'est un shoot debout, pas de glisse.)
+(Do NOT inject an entry velocity — this is a standing kick, not a glide.)
 
-- [ ] **Step 9: Renommer la RlCfg**
+- [ ] **Step 9: Rename the RlCfg**
 
-En bas du fichier, renommer `MicroduckGroundPickRlCfg` en `MicroduckShootRlCfg` et changer les noms d'expérience :
+At the bottom of the file, rename `MicroduckGroundPickRlCfg` to `MicroduckShootRlCfg` and change the experiment names:
 
 ```python
 MicroduckShootRlCfg = RslRlOnPolicyRunnerCfg(
-    # … (garder actor/critic/algorithm identiques) …
+    # … (keep actor/critic/algorithm identical) …
     wandb_project="mjlab_microduck",
     experiment_name="shoot",
     run_name="shoot",
@@ -646,21 +646,21 @@ MicroduckShootRlCfg = RslRlOnPolicyRunnerCfg(
 )
 ```
 
-- [ ] **Step 10: Vérifier que le module s'importe**
+- [ ] **Step 10: Check that the module imports**
 
 Run: `uv run python -c "from mjlab_microduck.tasks.microduck_shoot_env_cfg import make_microduck_shoot_env_cfg, MicroduckShootRlCfg; print('ok')"`
-Expected: `ok` (pas d'ImportError / NameError — en particulier plus aucune référence à `head_impact_cfg`, `MICRODUCK_GROUND_PICK_ROBOT_CFG`, ni aux rewards ground_pick supprimés).
+Expected: `ok` (no ImportError / NameError — in particular, no remaining reference to `head_impact_cfg`, `MICRODUCK_GROUND_PICK_ROBOT_CFG`, or the deleted ground_pick rewards).
 
 - [ ] **Step 11: Commit**
 
 ```bash
 git add src/mjlab_microduck/tasks/microduck_shoot_env_cfg.py
-git commit -m "feat: env config Mjlab-Shoot (geste de shoot par suivi de poses)"
+git commit -m "feat: Mjlab-Shoot env config (kick gesture by pose following)"
 ```
 
 ---
 
-### Task 5: Enregistrement + test d'intégration
+### Task 5: Registration + integration test
 
 **Files:**
 - Modify: `src/mjlab_microduck/tasks/__init__.py`
@@ -668,11 +668,11 @@ git commit -m "feat: env config Mjlab-Shoot (geste de shoot par suivi de poses)"
 
 **Interfaces:**
 - Consumes: `make_microduck_shoot_env_cfg`, `MicroduckShootRlCfg` (Task 4).
-- Produces: tâche enregistrée `Mjlab-Shoot-Flat-MicroDuck`.
+- Produces: the registered task `Mjlab-Shoot-Flat-MicroDuck`.
 
-- [ ] **Step 1: Écrire le test d'intégration qui échoue**
+- [ ] **Step 1: Write the failing integration test**
 
-Créer `tests/test_shoot_cfg.py` :
+Create `tests/test_shoot_cfg.py`:
 
 ```python
 from mjlab_microduck.tasks.microduck_shoot_env_cfg import (
@@ -706,14 +706,14 @@ def test_shoot_cfg_has_kick_rewards_and_no_walking():
         assert gone not in cfg.rewards
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [ ] **Step 2: Run, verify it fails**
 
 Run: `uv run --with pytest pytest tests/test_shoot_cfg.py -q`
-Expected: PASS possible sur les tests de poses, mais l'ensemble doit être vert seulement une fois l'env construit sans erreur ; si `make_...` lève, FAIL. (À ce stade l'import du fichier fonctionne déjà via Task 4.)
+Expected: the pose tests may PASS, but the whole file should only go green once the env builds without error; if `make_...` raises, FAIL. (At this stage importing the file already works thanks to Task 4.)
 
-- [ ] **Step 3: Enregistrer la tâche**
+- [ ] **Step 3: Register the task**
 
-Dans `src/mjlab_microduck/tasks/__init__.py`, après le bloc d'import ground_pick (~ligne 50), ajouter :
+In `src/mjlab_microduck/tasks/__init__.py`, after the ground_pick import block (~line 50), add:
 
 ```python
 from .microduck_shoot_env_cfg import (
@@ -722,7 +722,7 @@ from .microduck_shoot_env_cfg import (
 )
 ```
 
-Après le bloc `register_mjlab_task` de GroundPick-Rough (~ligne 161), ajouter :
+After the GroundPick-Rough `register_mjlab_task` block (~line 161), add:
 
 ```python
 register_mjlab_task(
@@ -735,40 +735,40 @@ register_mjlab_task(
 print("✓ Shoot task registered: Mjlab-Shoot-Flat-MicroDuck")
 ```
 
-- [ ] **Step 4: Lancer tout, vérifier le succès**
+- [ ] **Step 4: Run everything, verify it passes**
 
 Run: `uv run --with pytest pytest tests/ -q`
-Expected: PASS (test_shoot.py + test_shoot_cfg.py + tests existants).
+Expected: PASS (test_shoot.py + test_shoot_cfg.py + the existing tests).
 
-- [ ] **Step 5: Vérifier l'enregistrement de la tâche**
+- [ ] **Step 5: Verify the task registration**
 
 Run: `uv run python -c "import mjlab_microduck.tasks"`
-Expected: la sortie contient `✓ Shoot task registered: Mjlab-Shoot-Flat-MicroDuck`.
+Expected: the output contains `✓ Shoot task registered: Mjlab-Shoot-Flat-MicroDuck`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/mjlab_microduck/tasks/__init__.py tests/test_shoot_cfg.py
-git commit -m "feat: enregistre Mjlab-Shoot-Flat-MicroDuck + test d'intégration"
+git commit -m "feat: register Mjlab-Shoot-Flat-MicroDuck + integration test"
 ```
 
 ---
 
-## Après implémentation (hors plan TDD)
+## After implementation (outside the TDD plan)
 
-1. **Relever les vraies poses** avec `read_pose.py` (STAND, PIED_ARRIÈRE, PIED_AVANT), remplacer les placeholders dans `microduck_shoot_env_cfg.py`.
-2. **Entraîner** : `uv run train Mjlab-Shoot-Flat-MicroDuck --env.scene.num-envs 4096 --agent.max_iterations 8000`. Surveiller `Episode_Reward/kick_pose_track` (doit monter).
-3. **Play** : script play_latest ; vérifier l'équilibre sur le pied gauche pendant la frappe.
-4. **Export ONNX** + déploiement dans un slot phase (`--ground-pick shoot.onnx --ground-pick-period 2.5 --ground-pick-kp-ratio 1.0`).
-5. **Réglages probables** : période/timings (snap), poids `action_rate`, et éventuel reward « vitesse pied vers l'avant » (segment frappe) si le suivi manque de punch.
+1. **Record the real poses** with `read_pose.py` (STAND, FOOT_BACK, FOOT_FORWARD), and replace the placeholders in `microduck_shoot_env_cfg.py`.
+2. **Train**: `uv run train Mjlab-Shoot-Flat-MicroDuck --env.scene.num-envs 4096 --agent.max_iterations 8000`. Watch `Episode_Reward/kick_pose_track` (it must rise).
+3. **Play**: the play_latest script; check the balance on the left foot during the strike.
+4. **ONNX export** + deployment into a phase slot (`--ground-pick shoot.onnx --ground-pick-period 2.5 --ground-pick-kp-ratio 1.0`).
+5. **Likely adjustments**: period/timings (snap), the `action_rate` weight, and possibly a "forward foot velocity" reward (strike segment) if the pose following lacks punch.
 
-## Self-review — couverture de la spec
+## Self-review — spec coverage
 
-- Fichier & enregistrement → Tasks 4, 5. ✅
-- Poses placeholders 14 joints → Task 4 Step 2, testé Task 5. ✅
-- Commande de phase + `randomize_phase=False` + période → Tasks 1, 4 Step 5, testé Task 5. ✅
+- File & registration → Tasks 4, 5. ✅
+- 14-joint placeholder poses → Task 4 Step 2, tested in Task 5. ✅
+- Phase command + `randomize_phase=False` + period → Tasks 1, 4 Step 5, tested in Task 5. ✅
 - `kick_pose_target` + `kick_pose_track` + `kick_pose_track_l1` → Tasks 2, 3. ✅
-- Équilibre/appui (upright, pied gauche planté, feet_flat gauche, self_collisions, body_ang_vel) → Task 4 Step 6. ✅
-- Régularisation allégée → Task 4 Step 7. ✅
-- Obs 61D parité (hérité ground_pick, conservé) → Task 4 Step 1. ✅
-- Tests pures + cfg → Tasks 2, 3, 5. ✅
+- Balance/support (upright, left foot planted, left feet_flat, self_collisions, body_ang_vel) → Task 4 Step 6. ✅
+- Lighter regularization → Task 4 Step 7. ✅
+- 61D obs parity (inherited from ground_pick, preserved) → Task 4 Step 1. ✅
+- Pure-function + cfg tests → Tasks 2, 3, 5. ✅
