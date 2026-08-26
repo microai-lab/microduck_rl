@@ -1,86 +1,86 @@
-# Design — `roller_standup` : se relever sur rollers
+# Design — `roller_standup`: standing up on rollers
 
-**But** : une policy dédiée qui remet le microduck **debout sur ses rollers** après une chute
-(à plat ventre ou à plat dos), et qui sait ensuite **tenir** la station sur roues.
+**Goal**: a dedicated policy that puts the microduck back **upright on its rollers** after a fall
+(face down or face up), and that can then **hold** the stance on wheels.
 
-Portage de la recette `standup` (canard marcheur) vers le modèle rollers. Aucune modification
-des envs existants.
+A port of the `standup` recipe (walking duck) to the roller model. No changes to the
+existing envs.
 
 ---
 
-## Décisions actées
+## Settled decisions
 
-| Décision | Choix | Alternatives écartées |
+| Decision | Choice | Rejected alternatives |
 |---|---|---|
-| Forme | **Policy dédiée** épisodique | Greffer le relevé sur l'env roller (recette `velstand`) → risque réel de casser la foulée acquise |
-| Poses de départ | **ventre + dos + debout** | `assis` (n'existe que pour le hand-off depuis la policy `sit`, pas d'équivalent roller) ; côtés (couverture max mais convergence bien plus dure) ; sans `debout` (la policy se relèverait puis retomberait) |
-| Roues libres | **curriculum de friction de roulement inversé** | Vraie friction d'entrée (bootstrap trop dur) ; imposer une technique de patineur par récompenses (historique du repo : les récompenses de style trop directives créent des optima parasites — le swizzle, l'optimum paresseux du crouch) |
-| Pose cible | **HOME + hauteur mesurée** | `STAND_POSE` du roller-crouch (signalée comme issue ouverte : ≠ du neutre roller → à-coup au retour) ; pose lue sur le vrai robot (bloque le dev) |
-| Commande | **twist neutralisé** (≈ 0) | Commande de phase / slot bouton (voir « Déploiement ») ; tête pilotable |
+| Form | **Dedicated** episodic policy | Grafting the standup onto the roller env (the `velstand` recipe) → a real risk of breaking the learned gait |
+| Start poses | **face down + face up + standing** | `sitting` (only exists for the hand-off from the `sit` policy, no roller equivalent); side-lying (maximum coverage but much harder convergence); without `standing` (the policy would stand up then fall back) |
+| Free wheels | **reversed rolling-friction curriculum** | Real entry friction (bootstrap too hard); imposing a skater technique through rewards (repo history: overly directive style rewards create parasitic optima — the swizzle, the crouch's lazy optimum) |
+| Target pose | **HOME + measured height** | The roller-crouch's `STAND_POSE` (flagged as an open issue: ≠ the roller neutral → jolt on return); a pose read off the real robot (blocks development) |
+| Command | **neutralized twist** (≈ 0) | A phase command / button slot (see "Deployment"); steerable head |
 
 ---
 
 ## Architecture
 
-**Nouveau fichier** : `src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py`
+**New file**: `src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py`
 - `make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg`
 - `MicroduckRollerStandUpRlCfg` (`experiment_name="roller_standup"`)
-- Task id : `Mjlab-RollerStandUp-Flat-MicroDuck` (flat uniquement, pas de variante rough)
+- Task id: `Mjlab-RollerStandUp-Flat-MicroDuck` (flat only, no rough variant)
 
-**Dérivation** : `cfg = make_microduck_velocity_rollers_env_cfg()`.
+**Derivation**: `cfg = make_microduck_velocity_rollers_env_cfg()`.
 
-C'est le pattern de `roller_slope` (246 lignes) et non celui de `roller_crouch` (479 lignes, qui
-repart de `make_velocity_env_cfg()` et recopie tous les blocs de DR). On hérite ainsi sans risque
-de dérive :
+This is `roller_slope`'s pattern (246 lines), not `roller_crouch`'s (479 lines, which starts
+over from `make_velocity_env_cfg()` and copies every DR block). We thus inherit without any risk
+of drift:
 
-- le robot `MICRODUCK_WALK_ROLLERS_ROBOT_CFG` (14 joints actifs + 4 roues passives, BAM m6, kp_fw 200) ;
-- les capteurs `feet_ground_contact` (mode subtree sur `ankle_{l,r}_v1`) et `self_collision` ;
-- toute la DR : CoM tronc + tête, masse/inertie (pseudo_inertia), friction BAM, armature,
-  biais d'encodeur, désalignement IMU au niveau obs, friction des roulements ;
-- **l'observation unifiée 61D** `[gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14),
-  last_action(14), command(13)]` — condition dure pour l'interchangeabilité au runtime ;
-- la termination `nan_state` (garde élargi : joints + free-joint + roues).
+- the `MICRODUCK_WALK_ROLLERS_ROBOT_CFG` robot (14 active joints + 4 passive wheels, BAM m6, kp_fw 200);
+- the `feet_ground_contact` (subtree mode on `ankle_{l,r}_v1`) and `self_collision` sensors;
+- the whole DR stack: trunk + head CoM, mass/inertia (pseudo_inertia), BAM friction, armature,
+  encoder bias, obs-level IMU misalignment, bearing friction;
+- **the unified 61D observation** `[gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14),
+  last_action(14), command(13)]` — a hard requirement for runtime hot-swappability;
+- the `nan_state` termination (widened guard: joints + free joint + wheels).
 
-Le modèle rollers **permet physiquement** de s'allonger : `robot_allcollisions_rollers.xml` porte des
-géoms de collision sur le tronc (`np_f970`), les hanches, les jambes, les coques de tête et la mâchoire,
-en plus des 4 pneus. Vérifié.
+The roller model **physically allows** lying down: `robot_allcollisions_rollers.xml` carries
+collision geoms on the trunk (`np_f970`), the hips, the legs, the head shells and the jaw,
+in addition to the 4 tires. Verified.
 
 ---
 
-## Constantes mesurées
+## Measured constants
 
-Mesurées par cinématique exacte (minimum des sommets de maillage des géoms collidantes, pose
-`STAND` du keyframe, tronc ramené au contact) sur `scene_rollers.xml` vs `scene.xml` :
+Measured by exact kinematics (minimum over the mesh vertices of the colliding geoms, the keyframe's
+`STAND` pose, trunk lowered to contact) on `scene_rollers.xml` vs `scene.xml`:
 
-| pose | modèle pieds | modèle rollers |
+| pose | feet model | roller model |
 |---|---|---|
-| debout (`STAND` = HOME) | 0.1172 | **0.1407** |
-| à plat ventre (repos) | 0.0752 | 0.0752 |
-| à plat dos (repos) | 0.0476 | 0.0475 |
+| standing (`STAND` = HOME) | 0.1172 | **0.1407** |
+| face down (rest) | 0.0752 | 0.0752 |
+| face up (rest) | 0.0476 | 0.0475 |
 
-Contrôle de cohérence : le `standup` utilise `STAND_Z = 0.115` mesuré **sous charge** contre 0.1172
-en cinématique → ~2 mm d'affaissement. On applique la même correction, et le résultat tombe pile dans
-le `reset_base z = 0.1335–0.1435` déjà utilisé par l'env roller.
+Consistency cross-check: `standup` uses `STAND_Z = 0.115` measured **under load** against 0.1172
+kinematically → ~2 mm of sag. We apply the same correction, and the result falls exactly inside
+the `reset_base z = 0.1335–0.1435` range already used by the roller env.
 
 ```python
-ROLLER_STAND_Z   = 0.138   # tronc debout sur roues, sous charge (+23 mm vs pieds)
-ROLLER_PRONE_Z   = 0.075   # hauteur de repos à plat ventre
+ROLLER_STAND_Z   = 0.138   # trunk standing on wheels, under load (+23 mm vs feet)
+ROLLER_PRONE_Z   = 0.075   # face-down rest height
 EPISODE_LENGTH_S = 6.0
 ```
 
-Les hauteurs de repos au sol sont **identiques** aux deux modèles (c'est la coque du tronc qui touche,
-pas les pieds). Cela ne veut pas dire que la plage `prone_z` du `standup` se réutilise telle quelle :
-voir la note sous « Reset » — `prone_z_min` diverge (0.076 ici, pas 0.05) car une seule plage sert
-deux poses (ventre, dos) dont les hauteurs de contact au reset ne sont pas les mêmes.
+The ground rest heights are **identical** on both models (it is the trunk shell that touches,
+not the feet). That does not mean `standup`'s `prone_z` range can be reused as-is:
+see the note under "Reset" — `prone_z_min` diverges (0.076 here, not 0.05) because a single range serves
+two poses (face down, face up) whose contact heights at reset are not the same.
 
-La grandeur mesurée est bien celle que lisent les récompenses : `height_target_gaussian` et
-`height_l1_penalty` utilisent `root_link_pos_w[:, 2]`, qui vaut exactement `xpos[trunk_base].z`
-(le free-joint est sur `trunk_base`) — vérifié numériquement.
+The measured quantity is indeed the one the rewards read: `height_target_gaussian` and
+`height_l1_penalty` use `root_link_pos_w[:, 2]`, which equals exactly `xpos[trunk_base].z`
+(the free joint sits on `trunk_base`) — verified numerically.
 
-## Indices de joints
+## Joint indices
 
-Les roues passives sont **intercalées** dans l'ordre des joints. Ordre réel vérifié dans MuJoCo
-(`m.jnt_qposadr`, modèle rollers, 18 joints après le free-joint) :
+The passive wheels are **interleaved** in the joint ordering. Actual ordering verified in MuJoCo
+(`m.jnt_qposadr`, roller model, 18 joints after the free joint):
 
 ```
 0-4   left_hip_yaw, left_hip_roll, left_hip_pitch, left_knee, left_ankle
@@ -91,89 +91,89 @@ Les roues passives sont **intercalées** dans l'ordre des joints. Ordre réel v�
 ```
 
 ```python
-_LEG_JOINTS   = [0, 1, 2, 3, 4, 11, 12, 13, 14, 15]   # standup : [0-4, 9-13]
-_NECK_JOINTS  = [7, 8, 9, 10]                          # standup : [5-8]
+_LEG_JOINTS   = [0, 1, 2, 3, 4, 11, 12, 13, 14, 15]   # standup: [0-4, 9-13]
+_NECK_JOINTS  = [7, 8, 9, 10]                          # standup: [5-8]
 _WHEEL_JOINTS = [5, 6, 16, 17]
 ```
 
-Seul `_LEG_JOINTS` est réellement consommé (par les récompenses de pose). `_NECK_JOINTS` et
-`_WHEEL_JOINTS` sont déclarés pour la documentation et pour le test d'indices : le cou est résolu
-**par nom** (`neck_joint_pos_l2` appelle `find_joints(r".*(neck|head).*")` à chaque pas, précisément
-pour être robuste au décalage dû aux roues) et les roues par la regex `^passive_.*`.
+Only `_LEG_JOINTS` is actually consumed (by the pose rewards). `_NECK_JOINTS` and
+`_WHEEL_JOINTS` are declared for documentation and for the index test: the neck is resolved
+**by name** (`neck_joint_pos_l2` calls `find_joints(r".*(neck|head).*")` every step, precisely
+to be robust to the offset caused by the wheels) and the wheels by the `^passive_.*` regex.
 
-Le doc de passation signale explicitement cette fragilité. Elle est verrouillée par un test qui
-construit l'env et vérifie les noms de joints à ces indices (voir « Tests »).
+The handover doc flags this fragility explicitly. It is locked in by a test that
+builds the env and checks the joint names at those indices (see "Tests").
 
 ---
 
-## Récompenses
+## Rewards
 
-### Retirées de l'héritage roller
+### Removed from the roller inheritance
 
-| Retiré | Pourquoi |
+| Removed | Why |
 |---|---|
-| `wheel_speed`, `braking`, `skating_air_time`, `glide`, `single_support`, `gait_symmetry`, `forward_lean`, `heading_hold` | récompenses de foulée : aucun sens quand on est par terre |
-| `feet_flat` | pendant la montée les lames ne sont pas à plat → cette pénalité combattrait le geste |
-| `hip_roll_neutral` | se relever demande d'écarter les jambes |
-| `pose`, `com_height_target` | remplacés par les cibles pose/hauteur ci-dessous |
-| `upright` (gaussienne de base) | remplacée par `upright_linear` + `upright_sharp` |
+| `wheel_speed`, `braking`, `skating_air_time`, `glide`, `single_support`, `gait_symmetry`, `forward_lean`, `heading_hold` | stride rewards: meaningless while lying on the ground |
+| `feet_flat` | during the rise the blades are not flat → this penalty would fight the gesture |
+| `hip_roll_neutral` | standing up requires spreading the legs |
+| `pose`, `com_height_target` | replaced by the pose/height targets below |
+| `upright` (base gaussian) | replaced by `upright_linear` + `upright_sharp` |
 
-### Gardées de l'héritage roller
+### Kept from the roller inheritance
 
-| Reward | Poids | Rôle |
+| Reward | Weight | Role |
 |---|---|---|
-| `action_over_limit` | −0.5 | protection sim2real (sur-commande au-delà des butées), indépendante de la tâche |
+| `action_over_limit` | −0.5 | sim2real protection (over-commanding past the limits), task-independent |
 | `self_collisions` | −1.0 | |
-| `body_ang_vel` | **−0.05** | volontairement **léger** : le `standup` documente qu'à −0.15 il gelait le relevé (bloqueur de mouvement) |
+| `body_ang_vel` | **−0.05** | deliberately **light**: `standup` documents that at −0.15 it froze the rise (motion blocker) |
 | `angular_momentum` | −0.02 | |
-| `action_rate_l2` | curriculum −0.4 → −0.8 → −1.0 | l'env roller le met à plat à −1.0 ; on reprend la rampe du `standup` (douce au début → aide le bootstrap du grand mouvement de retournement) |
-| `neck_action_rate_l2` | −0.5 | tête stable |
-| `neck_joint_pos_l2` | −0.5 | garder la tête droite (le choix de `roller_slope`) — **remplace** la commande `head_pose` du `standup` |
+| `action_rate_l2` | curriculum −0.4 → −0.8 → −1.0 | the roller env pins it flat at −1.0; we reuse `standup`'s ramp (gentle at first → helps bootstrap the large roll-over motion) |
+| `neck_action_rate_l2` | −0.5 | stable head |
+| `neck_joint_pos_l2` | −0.5 | keep the head upright (`roller_slope`'s choice) — **replaces** `standup`'s `head_pose` command |
 | `joint_torques_l2` | −1e-3 | |
 
-### Ajoutée
+### Added
 
-| Reward | Poids | Rôle |
+| Reward | Weight | Role |
 |---|---|---|
-| `joint_torque_rate_l2` | −2e-3 | anti-jitter : le `standup` l'a identifié comme le seul amortisseur qui ne bloque pas le retournement (il pénalise la *variation* de couple, pas son amplitude ni la rotation du tronc) |
+| `joint_torque_rate_l2` | −2e-3 | anti-jitter: `standup` identified it as the only damper that does not block the roll-over (it penalizes the torque *rate*, not its magnitude nor trunk rotation) |
 
-### Récompenses de relevé (transplant du `standup`, remappé)
+### Standup rewards (transplanted from `standup`, remapped)
 
-Les dix termes sont copiés **avec leurs poids déjà réglés** par les itérations documentées dans
-`microduck_standup_env_cfg.py`. Seuls changent les indices de joints et les deux hauteurs.
-Toutes les fonctions mdp existent déjà — **rien à écrire dans `mdp.py`**.
+The ten terms are copied **with their already-tuned weights** from the iterations documented in
+`microduck_standup_env_cfg.py`. Only the joint indices and the two heights change.
+All the mdp functions already exist — **nothing to write in `mdp.py`**.
 
-| Reward | Fonction mdp | Poids | Paramètres roller | Rôle |
+| Reward | mdp function | Weight | Roller parameters | Role |
 |---|---|---|---|---|
-| `pose_stand_legs` | `pose_target_match` | +8.0 | `std=0.5`, `joint_indices=_LEG_JOINTS`, `target_overrides=None` (HOME) | pose articulaire cible |
-| `pose_stand_l1` | `pose_l1_penalty` | +5.0 | `joint_indices=_LEG_JOINTS`, `target_overrides=None` | bootstrap L1 : gradient constant même loin de HOME |
-| `height_stand` | `height_target_gaussian` | +4.0 | `std=0.04`, `target_height=0.138` | gaussienne large → tire depuis le sol |
-| `height_stand_sharp` | `height_target_gaussian` | +4.0 | `std=0.015`, `target_height=0.138` | gaussienne étroite → force les derniers cm |
-| `height_stand_l1` | `height_l1_penalty` | +30.0 | `target_height=0.138` | rend « rester par terre » net négatif (sinon optimum paresseux) |
-| `com_upward_velocity` | `com_upward_velocity` | +3.0 | `max_height=0.148` | paye le *mouvement* de montée (+10 mm de marge au-dessus de la cible, comme 0.125 vs 0.115 chez `standup`) |
-| `gentle_rise` | `trunk_vertical_accel_penalty` | −0.02 | | pénalise `\|a_z\|` → montée lisse à vitesse constante |
-| `upright_linear` | `body_upright_linear` | +6.0 | | `cos(tilt)` : fort gradient quand couché |
-| `upright_sharp` | `upright_gaussian_at_height` | +6.0 | `std=0.3`, `height_low=0.075`, `height_high=0.138` | gaussienne serrée gatée en hauteur → tue le penché-arrière |
-| `standing_composite` | `standing_composite_score` | +15.0 | `height_std=0.04`, `upright_std=0.40`, `pose_std=0.40`, `target_height=0.138`, `joint_indices=_LEG_JOINTS` | score multiplicatif hauteur × droit × pose |
+| `pose_stand_legs` | `pose_target_match` | +8.0 | `std=0.5`, `joint_indices=_LEG_JOINTS`, `target_overrides=None` (HOME) | target joint pose |
+| `pose_stand_l1` | `pose_l1_penalty` | +5.0 | `joint_indices=_LEG_JOINTS`, `target_overrides=None` | L1 bootstrap: constant gradient even far from HOME |
+| `height_stand` | `height_target_gaussian` | +4.0 | `std=0.04`, `target_height=0.138` | wide gaussian → pulls up from the ground |
+| `height_stand_sharp` | `height_target_gaussian` | +4.0 | `std=0.015`, `target_height=0.138` | narrow gaussian → forces the last few cm |
+| `height_stand_l1` | `height_l1_penalty` | +30.0 | `target_height=0.138` | makes "stay on the ground" net negative (otherwise a lazy optimum) |
+| `com_upward_velocity` | `com_upward_velocity` | +3.0 | `max_height=0.148` | pays for the *motion* of rising (+10 mm of margin above the target, like 0.125 vs 0.115 in `standup`) |
+| `gentle_rise` | `trunk_vertical_accel_penalty` | −0.02 | | penalizes `\|a_z\|` → smooth, constant-speed rise |
+| `upright_linear` | `body_upright_linear` | +6.0 | | `cos(tilt)`: strong gradient while lying down |
+| `upright_sharp` | `upright_gaussian_at_height` | +6.0 | `std=0.3`, `height_low=0.075`, `height_high=0.138` | tight height-gated gaussian → kills the backward lean |
+| `standing_composite` | `standing_composite_score` | +15.0 | `height_std=0.04`, `upright_std=0.40`, `pose_std=0.40`, `target_height=0.138`, `joint_indices=_LEG_JOINTS` | multiplicative score height × uprightness × pose |
 
-Tous les termes prennent `asset_cfg=SceneEntityCfg("robot", body_names=("trunk_base",))` là où le
-`standup` le fait.
+Every term takes `asset_cfg=SceneEntityCfg("robot", body_names=("trunk_base",))` wherever
+`standup` does.
 
-**Pas de pénalités d'impact** (tronc/tête) pour cette v1 : le `standup` n'en a pas, seul `velstand`
-en a. On garde le jeu minimal.
+**No impact penalties** (trunk/head) for this v1: `standup` has none, only `velstand`
+does. We keep the minimal set.
 
 ---
 
-## Observation et commande
+## Observation and command
 
-**Observation** : héritée intacte de l'env roller (61D). Aucune modification — c'est la raison de
-dériver de cet env.
+**Observation**: inherited untouched from the roller env (61D). No modification — that is the reason
+for deriving from that env.
 
-On ajoute `nan_policy = "sanitize"` sur les groupes actor et critic, comme `roller_slope` : un contact
-rare fait diverger le free-joint en NaN, l'obs est assainie (→ 0) pour ne pas tuer l'entraînement,
-et l'env fautif se reset au pas suivant.
+We add `nan_policy = "sanitize"` on the actor and critic groups, like `roller_slope`: a rare
+contact makes the free joint diverge to NaN, the obs is sanitized (→ 0) so training is not killed,
+and the offending env resets on the next step.
 
-**Commande** : le slot `twist` est neutralisé, exactement comme le `standup` :
+**Command**: the `twist` slot is neutralized, exactly like `standup`:
 
 ```python
 command = cfg.commands["twist"]
@@ -189,184 +189,183 @@ command.ranges.ang_vel_z = (-0.05, 0.05)
 cfg.commands["twist"] = microduck_mdp.VelocityCommandCommandOnlyCfg(**vars(command))
 ```
 
-Les slots `head_pose` (4) et `body_pose` (6) restent **zero-paddés** — convention de la famille
-roller (`roller`, `roller_crouch`, `roller_slope`). C'est un écart assumé vis-à-vis du `standup` de
-la marche, qui pilote la tête via une vraie commande `head_pose` 4D (voir « Risques »).
+The `head_pose` (4) and `body_pose` (6) slots stay **zero-padded** — the roller family's
+convention (`roller`, `roller_crouch`, `roller_slope`). This is a deliberate departure from the
+walker's `standup`, which steers the head through a real 4D `head_pose` command (see "Risks").
 
-Justification du twist neutralisé : dans `scripts/infer_policy.py`, la policy `standup` de la marche
-est chargée en `--standing` à côté de `--walking`, et la bascule est **automatique sur la magnitude
-de la commande de vitesse** (`infer_policy.py:262`, seuil 0.05) ; quand `standing` est active, le
-slot twist est laissé à zéro (`infer_policy.py:239`). Les slots à phase (`ground_pick`, `fold`)
-servent aux tricks one-shot déclenchés au bouton, pas à un relevé.
+Rationale for the neutralized twist: in `scripts/infer_policy.py`, the walker's `standup` policy
+is loaded as `--standing` alongside `--walking`, and the switch is **automatic on the velocity
+command's magnitude** (`infer_policy.py:262`, threshold 0.05); when `standing` is active, the
+twist slot is left at zero (`infer_policy.py:239`). The phase slots (`ground_pick`, `fold`)
+serve one-shot button-triggered tricks, not a standup.
 
 ---
 
 ## Reset
 
-Ajout de l'événement `set_ground_state` (mode `reset`), inséré **après** `reset_base` et
-`reset_robot_joints` de l'héritage (l'ordre des événements suit l'ordre d'insertion dans le dict) :
+We add the `set_ground_state` event (mode `reset`), inserted **after** the inherited `reset_base`
+and `reset_robot_joints` (event order follows insertion order in the dict):
 
 ```python
 cfg.events["set_ground_state"] = EventTermCfg(
     func=microduck_mdp.set_random_ground_state,
     mode="reset",
     params={
-        "face_down_prob":  0.50,   # ventre — piloté par le curriculum ci-dessous
-        "face_up_prob":    0.00,   # dos — introduit tard (le plus dur)
-        "sitting_prob":    0.00,   # pas de bucket assis → aucun override de joint à remapper
+        "face_down_prob":  0.50,   # face down — driven by the curriculum below
+        "face_up_prob":    0.00,   # face up — introduced late (the hardest)
+        "sitting_prob":    0.00,   # no sitting bucket → no joint overrides to remap
         "standing_prob":   0.50,
-        "prone_z_min":     0.076,  # cf. note ci-dessous — pas un simple héritage du standup
+        "prone_z_min":     0.076,  # cf. the note below — not a simple inheritance from standup
         "prone_z_max":     0.09,
-        "standing_z_min":  0.134,  # roller (contre 0.11–0.12 pour les pieds)
+        "standing_z_min":  0.134,  # roller (vs 0.11–0.12 for the feet model)
         "standing_z_max":  0.144,
-        "sitting_tilt_max": math.radians(10),  # ± bruit de pitch/roll ; s'applique AUSSI au bucket debout
+        "sitting_tilt_max": math.radians(10),  # ± pitch/roll noise; ALSO applies to the standing bucket
     },
 )
 ```
 
-Note : dans `set_random_ground_state`, le bucket `standing` réutilise le quaternion du bucket
-`sitting` — donc `sitting_tilt_max` bruite aussi les départs debout, ce qui est voulu.
+Note: in `set_random_ground_state`, the `standing` bucket reuses the `sitting` bucket's quaternion —
+so `sitting_tilt_max` also adds noise to standing starts, which is intended.
 
-**Sur `prone_z_min` = 0.076 (et pas 0.05, valeur reprise à tort du `standup`)** : les poses ventre et
-dos partagent une seule plage de z, mais leurs hauteurs de contact mesurées diffèrent — ventre
-0.0752, dos 0.0475 — donc une plage unique ne peut pas être idéale pour les deux. Le commentaire du
-`standup` justifie son plancher `0.05` par un repos mesuré à ~0.044 **après stabilisation sous
-gravité** ; or ce qui compte à l'instant du reset, c'est la hauteur de contact en pose HOME, pas la
-hauteur de repos une fois retombé. À 0.05, le ventre spawn avec la coque du tronc **enfoncée de
-25 mm dans le sol**, un pushout que la policy paie ensuite via `gentle_rise` /
-`joint_torque_rate_l2`. `prone_z_min = 0.076` élimine cette interpénétration, au prix d'un dos qui
-démarre 28–42 mm au-dessus de son repos — un artefact bien plus doux qu'un pushout de contact.
+**On `prone_z_min` = 0.076 (and not 0.05, a value wrongly carried over from `standup`)**: the face-down
+and face-up poses share a single z range, but their measured contact heights differ — face down
+0.0752, face up 0.0475 — so a single range cannot be ideal for both. `standup`'s comment justifies
+its `0.05` floor with a rest height measured at ~0.044 **after settling under gravity**; but what
+matters at reset time is the contact height in the HOME pose, not the rest height after settling.
+At 0.05, a face-down start spawns with the trunk shell **sunk 25 mm into the ground**, a pushout the
+policy then pays for through `gentle_rise` / `joint_torque_rate_l2`. `prone_z_min = 0.076` eliminates
+that interpenetration, at the cost of a face-up start 28–42 mm above its rest height — a far gentler
+artifact than a contact pushout.
 
-**Aucune modification de `mdp.py`** : `reset_robot_joints` de la base utilise
-`joint_names=(".*",)` avec `velocity_range=(0.0, 0.0)` et `default_joint_vel` (HOME_FRAME
-`joint_vel={".*": 0.0}`) → les 4 roues passives sont déjà remises à zéro à chaque reset. Vérifié.
+**No modification to `mdp.py`**: the base's `reset_robot_joints` uses
+`joint_names=(".*",)` with `velocity_range=(0.0, 0.0)` and `default_joint_vel` (HOME_FRAME
+`joint_vel={".*": 0.0}`) → the 4 passive wheels are already zeroed on every reset. Verified.
 
-**Curriculum `ground_state_mix`** (`event_param_curriculum`), même logique easy → hard que le
-`standup` : le dos est introduit tard et reçoit le plus d'entraînement à la fin.
+**Curriculum `ground_state_mix`** (`event_param_curriculum`), the same easy → hard logic as
+`standup`: face up is introduced late and gets the most training at the end.
 
-| iter | debout | ventre | dos |
+| iter | standing | face down | face up |
 |---|---|---|---|
 | 0 | 0.50 | 0.50 | 0.00 |
 | 600 | 0.35 | 0.45 | 0.20 |
 | 1500 | 0.25 | 0.40 | 0.35 |
 | 2500 | 0.20 | 0.40 | 0.40 |
 
-(Steps en unités de `common_step_counter` = `iter × 24`.)
+(Steps in units of `common_step_counter` = `iter × 24`.)
 
-**Poussées** : `push_robot` est hérité de l'env roller (±0.2 m/s, intervalle 3–6 s). On ajoute le
-curriculum montant du `standup` pour ne pas parasiter le bootstrap : 0 → ±0.08 (iter 500) → ±0.2
+**Pushes**: `push_robot` is inherited from the roller env (±0.2 m/s, 3–6 s interval). We add
+`standup`'s rising curriculum so as not to disturb the bootstrap: 0 → ±0.08 (iter 500) → ±0.2
 (iter 1000).
 
-**Terminations** : suppression de `fell_over` (le robot **démarre** tombé — la termination sur
-inclinaison n'a pas de sens ici). `nan_state` est hérité et conservé.
+**Terminations**: `fell_over` removed (the robot **starts** fallen — a tilt termination
+makes no sense here). `nan_state` is inherited and kept.
 
-**Terrain** : `plane`. Pas de variante rough pour cette v1 — cohérent avec l'env roller, qui n'a pas
-de paramètre `rough`.
+**Terrain**: `plane`. No rough variant for this v1 — consistent with the roller env, which has no
+`rough` parameter.
 
 ---
 
-## Curriculum de friction de roulement, inversé
+## Reversed rolling-friction curriculum
 
-C'est la seule pièce réellement nouvelle du design, et le cœur de la question posée par la tâche :
-**les roues roulent, il n'y a aucune adhérence longitudinale pour pousser sur le sol.**
+This is the only genuinely new piece of the design, and the heart of the question the task poses:
+**the wheels roll, there is no longitudinal traction to push against the ground.**
 
-Le mécanisme existe déjà et est hérité (`randomize_wheel_friction` via `dr.dof_frictionloss` sur
-`^passive_.*` + `wheel_friction_curriculum`). Dans l'env roller il **monte** 0 → 0.0015. Ici on le
-fait **descendre** :
+The mechanism already exists and is inherited (`randomize_wheel_friction` via `dr.dof_frictionloss` on
+`^passive_.*` + `wheel_friction_curriculum`). In the roller env it ramps **up** 0 → 0.0015. Here we ramp it
+**down**:
 
-| iter | frictionloss | effet |
+| iter | frictionloss | effect |
 |---|---|---|
-| 0 | 0.05 | roues quasi bloquées → il se relève comme s'il avait des pieds |
+| 0 | 0.05 | near-locked wheels → it rises as if it had feet |
 | 1000 | 0.02 | |
 | 2000 | 0.008 | |
 | 3000 | 0.003 | |
-| 4000 | 0.0015 | la vraie valeur du roulement (celle de l'env roller) |
+| 4000 | 0.0015 | the real rolling value (the roller env's) |
 
-`wheel_friction_curriculum` applique simplement le dernier palier franchi
-(`if env.common_step_counter > stage["step"]`) — il fonctionne aussi bien en descente qu'en montée.
-**Zéro code à écrire.**
+`wheel_friction_curriculum` simply applies the last stage crossed
+(`if env.common_step_counter > stage["step"]`) — it works just as well going down as going up.
+**Zero code to write.**
 
-**Ce que ce curriculum nous dit** : si `Episode_Reward/standing_composite` s'écroule quand la
-friction baisse, on a la réponse nette que le geste « pieds adhérents » ne transfère pas aux roues
-libres, et il faudra guider une technique de patineur (appui genou intermédiaire, un patin à la
-fois). C'est un résultat exploitable, pas un échec.
+**What this curriculum tells us**: if `Episode_Reward/standing_composite` collapses when the
+friction drops, we have a clear answer that the "sticky feet" gesture does not transfer to free
+wheels, and we will have to guide a skater technique (intermediate knee support, one skate at a
+time). That is an actionable result, not a failure.
 
 ---
 
-## Réseau et PPO
+## Network and PPO
 
-Identiques au `standup` : actor et critic `(512, 256, 128)` elu, `obs_normalization=True`
-(normaliseur baké dans l'ONNX par `export.py`), PPO `lr=1e-3` schedule adaptive, `desired_kl=0.01`,
+Identical to `standup`: actor and critic `(512, 256, 128)` elu, `obs_normalization=True`
+(the normalizer is baked into the ONNX by `export.py`), PPO `lr=1e-3` adaptive schedule, `desired_kl=0.01`,
 `entropy_coef=0.01`, `gamma=0.99`, `lam=0.95`, `num_steps_per_env=24`, `save_interval=250`,
-`max_iterations=15_000`. **Symétrie OFF** (`SYMMETRY_CFG` est câblé pour l'ancien layout 51D et casse
-sur le 61D — même situation que tous les envs v1.5+).
+`max_iterations=15_000`. **Symmetry OFF** (`SYMMETRY_CFG` is wired for the old 51D layout and breaks
+on the 61D one — the same situation as every v1.5+ env).
 
 ---
 
 ## Tests
 
-`tests/test_roller_standup_cfg.py` :
+`tests/test_roller_standup_cfg.py`:
 
-1. l'env se construit (`play=False` et `play=True`) ;
-2. **les noms de joints aux indices `_LEG_JOINTS` / `_NECK_JOINTS` / `_WHEEL_JOINTS` sont les bons**
-   (le verrou contre la fragilité des roues intercalées) ;
-3. les récompenses de relevé attendues sont présentes, les récompenses de patinage absentes
-   (`wheel_speed`, `glide`, `single_support`, `feet_flat`, …) ;
-4. `fell_over` absent, `nan_state` présent ;
-5. le curriculum `wheel_friction` est bien **décroissant** et finit à 0.0015 ;
-6. le curriculum `ground_state_mix` : les probabilités du dernier palier somment à 1 et
-   `face_up_prob` croît de façon monotone ;
-7. **parité d'obs** : les noms et dimensions des termes actor/critic sont identiques à ceux de
-   `make_microduck_velocity_rollers_env_cfg()` (sinon l'ONNX ne se charge pas dans un slot).
+1. the env builds (`play=False` and `play=True`);
+2. **the joint names at the `_LEG_JOINTS` / `_NECK_JOINTS` / `_WHEEL_JOINTS` indices are correct**
+   (the lock-in against the interleaved-wheel fragility);
+3. the expected standup rewards are present, the skating rewards absent
+   (`wheel_speed`, `glide`, `single_support`, `feet_flat`, …);
+4. `fell_over` absent, `nan_state` present;
+5. the `wheel_friction` curriculum is indeed **decreasing** and ends at 0.0015;
+6. the `ground_state_mix` curriculum: the last stage's probabilities sum to 1 and
+   `face_up_prob` grows monotonically;
+7. **obs parity**: the names and dimensions of the actor/critic terms are identical to those of
+   `make_microduck_velocity_rollers_env_cfg()` (otherwise the ONNX will not load in a slot).
 
-Lancer : `uv run --with pytest pytest tests/ -q`.
+Run: `uv run --with pytest pytest tests/ -q`.
 
 ---
 
-## Entraînement et déploiement
+## Training and deployment
 
 ```bash
 uv run train Mjlab-RollerStandUp-Flat-MicroDuck --env.scene.num-envs 4096 --agent.max_iterations 15000
 ```
 
-Surveiller `Episode_Reward/standing_composite` (doit monter), et surtout son comportement **aux
-paliers de friction de roulement** (iters 1000/2000/3000/4000).
+Watch `Episode_Reward/standing_composite` (it must rise), and above all its behavior **at the
+rolling-friction stages** (iters 1000/2000/3000/4000).
 
-Play : `uv run scripts/play_latest.py`. Export : `uv run scripts/export_latest.py`.
+Play: `uv run scripts/play_latest.py`. Export: `uv run scripts/export_latest.py`.
 
-Déploiement visé : la policy en `--standing` face à la policy roller en `--walking`, avec la bascule
-automatique sur la magnitude de la commande. **Réserve** : `infer_policy.py` est le script de
-sim/clavier local ; le runtime robot est le binaire Rust `microduck_runtime`, absent de ce repo — il
-n'est pas vérifié ici qu'il expose un équivalent `--standing` avec la même bascule. Le doc de
-passation ne liste que `--model`, `--ground-pick`, `--fold-policy`. À confirmer. Cela ne change rien
-à l'entraînement : si le runtime n'a pas ce slot, la policy reste utilisable dans un slot bouton (la
-commande y serait une phase au lieu de zéro — ce serait alors le seul point à revoir).
+Intended deployment: the policy in `--standing` alongside the roller policy in `--walking`, with the
+automatic switch on command magnitude. **Caveat**: `infer_policy.py` is the local
+sim/keyboard script; the robot runtime is the Rust binary `microduck_runtime`, absent from this repo — it
+has not been verified here that it exposes a `--standing` equivalent with the same switching. The
+handover doc only lists `--model`, `--ground-pick`, `--fold-policy`. To be confirmed. This changes nothing
+about training: if the runtime lacks that slot, the policy remains usable in a button slot (the
+command there would be a phase instead of zero — that would then be the only point to revisit).
 
 ---
 
-## Risques et points de vigilance
+## Risks and points to watch
 
-1. **Le relevé sur roues libres est peut-être infaisable sans technique dédiée.** C'est le risque
-   principal. Le curriculum de friction est conçu pour trancher cette question de façon lisible
-   plutôt que pour la contourner.
-2. **Le bucket « dos » est le plus dur.** Le `standup` documente qu'il gelait en « ne rien faire »
-   sur cette pose, et que la cause était les *bloqueurs de mouvement* (`body_ang_vel` élevé,
-   `action_rate` trop fort). Les valeurs reprises ici sont celles de la version « se relève de
-   partout » — ne pas les durcir sans raison.
-3. **Tête zero-paddée vs commande `head_pose`.** Si la policy est déployée en `--standing` et que
-   quelqu'un actionne les touches de tête, `infer_policy` écrit `cmd[3:7] = head_offset` et la policy
-   voit du hors-distribution. Choix assumé pour rester dans la convention roller ; à revoir si le
-   pilotage de tête pendant le relevé s'avère nécessaire.
-4. **Frictionloss 0.05 est loin du réel.** Les paliers 0 → 2000 iters produisent une policy qui ne
-   transfère pas ; seuls les checkpoints d'après le dernier palier (iter 4000+) sont candidats au
-   déploiement.
+1. **Standing up on free wheels may be infeasible without a dedicated technique.** That is the main
+   risk. The friction curriculum is designed to settle this question legibly rather than to work
+   around it.
+2. **The "face up" bucket is the hardest.** `standup` documents that it froze into "do nothing"
+   on that pose, and that the cause was the *motion blockers* (high `body_ang_vel`,
+   too strong an `action_rate`). The values reused here are those of the "gets up from
+   anywhere" version — do not harden them without a reason.
+3. **Zero-padded head vs a `head_pose` command.** If the policy is deployed as `--standing` and
+   someone presses the head keys, `infer_policy` writes `cmd[3:7] = head_offset` and the policy
+   sees out-of-distribution input. A deliberate choice to stay within the roller convention; to be revisited if
+   steering the head during the standup turns out to be necessary.
+4. **Frictionloss 0.05 is far from reality.** The stages from iter 0 → 2000 produce a policy that does
+   not transfer; only checkpoints from after the last stage (iter 4000+) are deployment candidates.
 
-## Hors périmètre
+## Out of scope
 
-- Intégrer le relevé dans la policy de roulage (recette `velstand`) — décision reportée après
-  validation de la faisabilité.
-- Buckets de départ sur le côté.
-- Variante rough / terrain accidenté.
-- Pénalités d'impact tronc/tête.
-- Toute modification des envs `roller`, `roller_crouch`, `roller_slope`, `standup`, `velstand`, ou
-  de `mdp.py`.
+- Integrating the standup into the rolling policy (the `velstand` recipe) — decision deferred until
+  feasibility is validated.
+- Side-lying start buckets.
+- A rough / uneven-terrain variant.
+- Trunk/head impact penalties.
+- Any modification to the `roller`, `roller_crouch`, `roller_slope`, `standup`, `velstand` envs, or
+  to `mdp.py`.
