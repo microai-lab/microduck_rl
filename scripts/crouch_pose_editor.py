@@ -1,11 +1,11 @@
 """Interactive crouch pose editor (roller robot).
 
-Ouvre le viewer MuJoCo avec le robot rollers debout. Dans le panneau "Control"
-du viewer, bouge les sliders (genoux/hanches/chevilles…) pour composer la pose
-ACCROUPIE voulue. La gravité est coupée et la base est maintenue droite +
-abaissée pour que le point le plus bas reste au sol (tu vois donc le tronc
-descendre quand tu plies les genoux). À la fermeture de la fenêtre, la pose est
-imprimée en dict CROUCH_POSE  {nom_articulation: angle_rad}  prêt à coller.
+Opens the MuJoCo viewer with the roller robot standing. In the viewer's
+"Control" panel, move the sliders (knees/hips/ankles…) to compose the CROUCH
+pose you want. Gravity is turned off and the base is held upright and lowered so
+that the lowest point stays on the ground (so you see the trunk descend as you
+bend the knees). When the window is closed, the pose is printed as a CROUCH_POSE
+dict  {joint_name: angle_rad}  ready to paste.
 
 Usage:
     uv run python scripts/crouch_pose_editor.py
@@ -30,15 +30,15 @@ def home_value(joint_name: str):
     return 0.0
 
 
-# Modèle direct depuis le spec du robot (14 actionneurs <position> dans le XML).
+# Model built directly from the robot spec (14 <position> actuators in the XML).
 model = get_walk_rollers_spec().compile()
 data = mujoco.MjData(model)
 mujoco.mj_resetData(model, data)
-model.opt.gravity[:] = [0, 0, 0]  # rien ne s'effondre : seuls les sliders bougent
+model.opt.gravity[:] = [0, 0, 0]  # nothing collapses: only the sliders move it
 
 has_free = model.jnt_type[0] == mujoco.mjtJoint.mjJNT_FREE
 
-# Articulations actionnées (hors roues passives), avec adresse qpos.
+# Actuated joints (excluding passive wheels), with their qpos address.
 joints = []
 for i in range(model.njnt):
     name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
@@ -46,7 +46,7 @@ for i in range(model.njnt):
         continue
     joints.append((name, model.jnt_qposadr[i]))
 
-# ctrl initial = pose HOME (les actionneurs position tiennent cette cible).
+# Initial ctrl = HOME pose (the position actuators hold that target).
 for a in range(model.nu):
     aname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, a)
     data.ctrl[a] = home_value(aname or "")
@@ -63,9 +63,9 @@ robot_geoms = [g for g in range(model.ngeom)
 mujoco.mj_forward(model, data)
 
 print("=== Crouch Pose Editor (rollers) ===")
-print(f"actionneurs: {model.nu} | base flottante: {has_free}")
-print("Ouvre le panneau 'Control' du viewer et bouge les sliders pour composer")
-print("la pose ACCROUPIE. Ferme la fenêtre quand c'est bon.\n")
+print(f"actuators: {model.nu} | floating base: {has_free}")
+print("Open the viewer's 'Control' panel and move the sliders to compose")
+print("the CROUCH pose. Close the window when you are happy with it.\n")
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
@@ -73,7 +73,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             data.qpos[0:2] = base_xy
             data.qpos[3:7] = base_quat
             data.qvel[0:6] = 0.0
-        mujoco.mj_step(model, data)  # actionneurs position -> les joints suivent ctrl
+        mujoco.mj_step(model, data)  # position actuators -> the joints follow ctrl
         if has_free:
             data.qpos[0:2] = base_xy
             data.qpos[3:7] = base_quat
@@ -89,11 +89,11 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
         time.sleep(1.0 / 60.0)
 
-print("\n=== Pose accroupie capturée ===\n")
+print("\n=== Captured crouch pose ===\n")
 print("CROUCH_POSE = {")
 for name, adr in joints:
     print(f'    "{name}": {float(data.qpos[adr]):.4f},')
 print("}")
 if has_free:
-    print(f"\n# hauteur de base finale (info) : z = {float(data.qpos[2]):.4f}")
-print("# Colle CROUCH_POSE ici et donne-le a Claude pour cabler la reward.")
+    print(f"\n# final base height (info): z = {float(data.qpos[2]):.4f}")
+print("# Paste CROUCH_POSE here and hand it to Claude to wire up the reward.")

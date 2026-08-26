@@ -15,7 +15,7 @@ Key design decisions:
     function can anticipate the kick payoff.
   - No phase command: the kick reward is available from t=0 and an earlier
     kick collects more ball-rolling reward, so the policy kicks immediately.
-    At deployment: hard ONNX swap to this policy (à la jump/ground-pick), it
+    At deployment: hard ONNX swap to this policy (like jump/ground-pick), it
     kicks, then auto-swap back after ~2s.
   - Right-foot kick is enforced geometrically + economically: the ball spawns
     at the right toe, and an always-on LEFT-foot-grounded reward makes the

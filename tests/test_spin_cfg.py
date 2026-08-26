@@ -9,9 +9,9 @@ def test_cfg_uses_phase_command_with_runtime_default_period():
     cfg = make_microduck_spin_env_cfg()
     cmd = cfg.commands["twist"]
     assert isinstance(cmd, microduck_mdp.GroundPickPhaseCommandCfg)
-    # 4.0 s = le défaut de --ground-pick-period : rien à passer au runtime
+    # 4.0 s = the default of --ground-pick-period: nothing to pass at runtime
     assert cmd.period == 4.0
-    # chaque épisode démarre à phase 0 (debout), comme le bouton au déploiement
+    # every episode starts at phase 0 (standing), like the button at deployment
     assert cmd.randomize_phase is False
 
 
@@ -26,29 +26,30 @@ def test_cfg_has_the_spin_rewards():
         "leg_antisymmetry",
     ):
         assert name in cfg.rewards, name
-    # objectif principal avec un poids dominant
+    # main objective with a dominant weight
     assert cfg.rewards["spin_rate_track"].weight == 6.0
-    # sur-place est un COÛT
+    # staying in place is a COST
     assert cfg.rewards["spin_stay_in_place"].weight < 0.0
 
 
 def test_stay_in_place_is_attenuated_during_the_launch_ramp():
-    # Renforcé à -3.0, ce terme s'opposerait à l'injection de moment angulaire s'il
-    # était plein tarif pendant la rampe de lancement : il doit y être atténué.
+    # Strengthened to -3.0, this term would oppose the injection of angular
+    # momentum if it were full price during the launch ramp: it must be attenuated
+    # there.
     cfg = make_microduck_spin_env_cfg()
     params = cfg.rewards["spin_stay_in_place"].params
     assert 0.0 < params["launch_scale"] < 1.0
     assert params["accel_end"] == microduck_mdp.SPIN_ACCEL_END
-    # cible positive = anti-horaire (le sens est porté par l'enveloppe)
+    # positive target = counter-clockwise (the direction is carried by the envelope)
     assert microduck_mdp.SPIN_RATE_MAX > 0.0
 
 
 def test_angular_momentum_reward_is_removed():
-    # Régression : angular_momentum_penalty pénalise la NORME 3D du moment
-    # angulaire, elle combattrait directement le spin. Elle doit être absente.
+    # Regression: angular_momentum_penalty penalizes the 3D NORM of angular
+    # momentum, so it would fight the spin head-on. It must be absent.
     cfg = make_microduck_spin_env_cfg()
     assert "angular_momentum" not in cfg.rewards
-    # body_ang_vel ne pénalise que x/y -> elle reste, elle mate le ballant
+    # body_ang_vel only penalizes x/y -> it stays, it damps the wobble
     assert "body_ang_vel" in cfg.rewards
 
 
@@ -60,14 +61,14 @@ def test_head_yaw_is_free_to_act_as_a_flywheel():
 
 def test_entry_velocity_allows_standstill_and_slow_roll():
     cfg = make_microduck_spin_env_cfg()
-    # jamais via un push en mode reset (régression NaN du crouch)
+    # never through a reset-mode push (the crouch's NaN regression)
     assert "entry_velocity" not in cfg.events
     lo, hi = cfg.events["reset_base"].params["velocity_range"]["x"]
     assert lo == 0.0 and hi > 0.0
 
 
 def test_symmetry_augmentation_is_disabled():
-    # la symétrie G/D transformerait un spin à gauche en spin à droite
+    # L/R symmetry would turn a left spin into a right spin
     assert MicroduckSpinRlCfg.algorithm.symmetry_cfg is None
 
 
@@ -81,9 +82,9 @@ def test_leg_antisymmetry_shaping_decays():
 
 
 def test_actor_observation_keeps_the_61d_slot_layout():
-    # condition pour que l'ONNX charge dans le slot du runtime. L'égalité exacte
-    # des dimensions avec le crouch est vérifiée par test_obs_parity_with_roller_crouch
-    # ci-dessous ; ici on vérifie la structure.
+    # required for the ONNX to load in the runtime slot. Exact dimensional
+    # equality with the crouch is checked by test_obs_parity_with_roller_crouch
+    # below; here we check the structure.
     cfg = make_microduck_spin_env_cfg()
     terms = cfg.observations["actor"].terms
     assert "base_lin_vel" not in terms
@@ -95,9 +96,9 @@ def test_actor_observation_keeps_the_61d_slot_layout():
 
 
 def test_obs_parity_with_roller_crouch():
-    # Parité de layout obligatoire : sinon l'ONNX exporté ne charge pas dans le
-    # slot du runtime. Contrairement au test de structure ci-dessus, celui-ci
-    # compare l'ordre EXACT des termes, groupe par groupe.
+    # Layout parity is mandatory: otherwise the exported ONNX will not load in the
+    # runtime slot. Unlike the structural test above, this one compares the EXACT
+    # ordering of the terms, group by group.
     from mjlab_microduck.tasks.microduck_roller_crouch_env_cfg import (
         make_microduck_roller_crouch_env_cfg,
     )
@@ -107,4 +108,4 @@ def test_obs_parity_with_roller_crouch():
     for grp in ("actor", "critic"):
         assert list(spin.observations[grp].terms.keys()) == list(
             crouch.observations[grp].terms.keys()
-        ), f"layout d'observation divergent sur le groupe {grp}"
+        ), f"observation layout diverged on group {grp}"

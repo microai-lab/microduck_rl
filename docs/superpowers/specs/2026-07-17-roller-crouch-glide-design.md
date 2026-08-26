@@ -1,121 +1,121 @@
-# Design — Roller Crouch-Glide (« s'accroupir en glissant » au bouton)
+# Design — Roller Crouch-Glide ("crouch while gliding", on a button press)
 
-**Date :** 2026-07-17
-**Statut :** conception validée, prêt pour le plan d'implémentation
+**Date:** 2026-07-17
+**Status:** design approved, ready for the implementation plan
 
-## Contexte
+## Context
 
-Le robot microduck sait patiner (policy roller, tâche `Mjlab-Velocity-Flat-MicroDuck-Rollers`).
-On veut un nouveau geste : sur un appui bouton, il **s'accroupit et continue de glisser
-sur son élan** (comme un patineur en position basse), maintient ~1 s, puis **se relève**
-tout seul et reprend le patinage.
+The microduck robot can skate (the roller policy, task `Mjlab-Velocity-Flat-MicroDuck-Rollers`).
+We want a new gesture: on a button press, it **crouches and keeps gliding on its
+momentum** (like a skater in a low stance), holds for ~1 s, then **stands back up**
+by itself and resumes skating.
 
-Contrainte forte de l'utilisatrice : **ne pas modifier le runtime Rust**
-(`apirrone/microduck_runtime`, installé en binaire). Le geste doit donc réutiliser un
-mécanisme déjà présent dans le runtime.
+Hard constraint from the user: **do not modify the Rust runtime**
+(`apirrone/microduck_runtime`, installed as a binary). The gesture must therefore reuse a
+mechanism already present in the runtime.
 
-**Découverte clé :** le runtime a déjà un slot « comportement one-shot déclenché au
-bouton » : `--ground-pick`. Il est déclenché par le **bouton A** (front montant),
-joue une policy ONNX pilotée par une **phase** pendant une durée fixe, puis revient
-automatiquement à la policy principale. Surtout, il utilise **exactement le même
-layout d'observation 61D** que la policy roller — les deux sont interchangeables au
-runtime. C'est le véhicule idéal, sans une ligne de Rust.
+**Key discovery:** the runtime already has a "one-shot button-triggered behavior"
+slot: `--ground-pick`. It is triggered by **button A** (rising edge), plays a
+phase-driven ONNX policy for a fixed duration, then automatically returns to the
+main policy. Crucially, it uses **exactly the same 61D observation layout** as the
+roller policy — the two are hot-swappable at runtime. It is the ideal vehicle,
+without a line of Rust.
 
-Compromis accepté : le geste est **one-shot** (durée fixe, pas de « bascule maintenue »).
-La durée de l'accroupi est fixée par la période du slot.
+Accepted trade-off: the gesture is **one-shot** (fixed duration, no "hold to keep it").
+The crouch duration is set by the slot's period.
 
-## Approche retenue (approche B)
+## Chosen approach (approach B)
 
-Créer une **nouvelle tâche mjlab** entraînée sur le robot rollers, qui joue
-descente → glisse accroupi → remontée, piloté par la phase du slot ground-pick.
-L'exporter en ONNX et la charger via `--ground-pick`. Aucune modif Rust.
+Create a **new mjlab task** trained on the roller robot, which plays
+descent → crouched glide → rise, driven by the ground-pick slot's phase.
+Export it to ONNX and load it via `--ground-pick`. No Rust changes.
 
-### Fichiers concernés
+### Files involved
 
-| Fichier | Action |
+| File | Action |
 |---|---|
-| `src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py` | **Nouveau.** L'env, hybride roller + ground-pick. |
-| `src/mjlab_microduck/tasks/mdp.py` | **Ajout** de la reward `crouch_glide_height_by_phase`. |
-| `src/mjlab_microduck/tasks/__init__.py` | **Ajout** : enregistrer `Mjlab-RollerCrouch-Flat-MicroDuck`. |
+| `src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py` | **New.** The env, a roller + ground-pick hybrid. |
+| `src/mjlab_microduck/tasks/mdp.py` | **Add** the `crouch_glide_height_by_phase` reward. |
+| `src/mjlab_microduck/tasks/__init__.py` | **Add**: register `Mjlab-RollerCrouch-Flat-MicroDuck`. |
 
-### Réutilisation (ne rien réinventer)
+### Reuse (do not reinvent anything)
 
-- **Physique / robot roller** ← `microduck_velocity_rollers_env_cfg.py` :
-  `MICRODUCK_WALK_ROLLERS_ROBOT_CFG` (14 joints actifs + 4 roues passives),
-  capteur de contact sur les `roller_blade`, DR friction des roulements
-  (`randomize_wheel_friction` + curriculum), obs 14-dim (roues exclues via
+- **Roller physics / robot** ← `microduck_velocity_rollers_env_cfg.py`:
+  `MICRODUCK_WALK_ROLLERS_ROBOT_CFG` (14 active joints + 4 passive wheels),
+  contact sensor on the `roller_blade`s, bearing-friction DR
+  (`randomize_wheel_friction` + curriculum), 14-dim obs (wheels excluded via
   `SceneEntityCfg("robot", joint_names=(r"^(?!passive_).*",))`), `action.scale=1.0`,
   `kp_fw=200`.
-- **Machinerie phase / one-shot** ← `microduck_ground_pick_env_cfg.py` :
-  commande `microduck_mdp.GroundPickPhaseCommand` **réutilisée telle quelle**
-  (produit le `[cos(2πφ), sin(2πφ), 0]` que le runtime enverra dans le slot twist),
-  padding head/body à zéro (`zero_command_padding`), terminaison `robot_state_is_nan`,
+- **Phase / one-shot machinery** ← `microduck_ground_pick_env_cfg.py`:
+  the `microduck_mdp.GroundPickPhaseCommand` command **reused as-is**
+  (it produces the `[cos(2πφ), sin(2πφ), 0]` the runtime will send into the twist slot),
+  zero head/body padding (`zero_command_padding`), the `robot_state_is_nan` termination,
   `reset_action_history`.
-- **DR sim2real** ← repris du roller env sans changement (IMU misalignment obs-level,
-  encoder bias, masse/inertie, friction BAM, armature, pushes doux ±0.2).
+- **sim2real DR** ← taken from the roller env unchanged (obs-level IMU misalignment,
+  encoder bias, mass/inertia, BAM friction, armature, gentle ±0.2 pushes).
 
-## Le cœur : cible de hauteur « en trapèze » pilotée par la phase
+## The core: a trapezoidal, phase-driven height target
 
-Seule vraie nouveauté. Au lieu de descendre la bouche (ground-pick), on pilote la
-**hauteur du tronc** (`com_height` du `trunk_base`) selon la phase, avec un palier bas :
+The only genuine novelty. Instead of lowering the mouth (ground-pick), we drive the
+**trunk height** (`com_height` of `trunk_base`) along the phase, with a low plateau:
 
 ```
-hauteur
- haute ┐                    ┌──   debout (rend la main à la policy roller)
+height
+  high ┐                    ┌──   standing (hands control back to the roller policy)
        │ \                 /
-  basse│  \_______________/       accroupi + glisse (palier 1 s)
+   low │  \_______________/       crouched + gliding (1 s plateau)
        └───────────────────────► phase
        0   0.375      0.625   1
 ```
 
-- φ ∈ [0, 0.375] : descente vers la hauteur accroupie
-- φ ∈ [0.375, 0.625] : **maintien accroupi** (= 1 s sur une période de 4 s) → glisse
-- φ ∈ [0.625, 1.0] : remontée vers la pose roller debout
+- φ ∈ [0, 0.375]: descent toward the crouched height
+- φ ∈ [0.375, 0.625]: **crouch hold** (= 1 s over a 4 s period) → glide
+- φ ∈ [0.625, 1.0]: rise back to the standing roller pose
 
-**Nouvelle reward `crouch_glide_height_by_phase(env, command_name, height_low,
-height_high, hold_lo=0.375, hold_hi=0.625, std=...)`** dans `mdp.py` :
-lit la phase depuis la commande, calcule la hauteur-cible (interpolée haut→bas→haut,
-plate sur le palier), récompense `exp(-((h_mesurée - h_cible)/std)²)`.
-S'inspirer des fonctions `com_height_target` (mdp.py:694) et des
-`interpolated/multistage height target` déjà présentes.
+**New reward `crouch_glide_height_by_phase(env, command_name, height_low,
+height_high, hold_lo=0.375, hold_hi=0.625, std=...)`** in `mdp.py`:
+it reads the phase from the command, computes the target height (interpolated
+high→low→high, flat over the plateau), and rewards `exp(-((h_measured - h_target)/std)²)`.
+Take inspiration from `com_height_target` (mdp.py:694) and the
+`interpolated/multistage height target` functions already present.
 
-Valeurs de départ : `height_high ≈ 0.11` m (hauteur roller debout, cf. bande
-`com_height_target` roller 0.0935–0.1235), `height_low ≈ 0.075` m (accroupi ;
-à affiner en play). La phase est reconstruite depuis `atan2(sin, cos)` de la commande.
+Starting values: `height_high ≈ 0.11` m (standing roller height, cf. the roller
+`com_height_target` band 0.0935–0.1235), `height_low ≈ 0.075` m (crouched;
+to be refined at play time). The phase is reconstructed from `atan2(sin, cos)` of the command.
 
-## Récompenses
+## Rewards
 
-| Reward | Rôle | Origine |
+| Reward | Role | Origin |
 |---|---|---|
-| `crouch_glide_height_by_phase` | Cible principale (haut→bas→haut) | **nouveau** |
-| `wheel_speed` (poids réduit ~2–3) | Garder l'élan, ne pas freiner pendant l'accroupi | roller env (`wheel_speed_reward`) |
-| `upright` (≈2), `body_ang_vel` (−0.05), `angular_momentum` (−0.02) | Équilibre / stabilité | roller env |
-| `return_pose` (fin de phase) | Converger vers la pose roller debout pour rendre la main proprement | adapté de `ground_pick_return_pose` |
-| `feet_flat` (−2) | Lames à plat → glisse stable | roller env |
-| `action_rate_l2`, `neck_action_rate_l2`, `joint_torques_l2`, `self_collisions` | Lissage / transfert sim2real | les deux envs |
+| `crouch_glide_height_by_phase` | Main target (high→low→high) | **new** |
+| `wheel_speed` (reduced weight ~2–3) | Keep the momentum, do not brake during the crouch | roller env (`wheel_speed_reward`) |
+| `upright` (≈2), `body_ang_vel` (−0.05), `angular_momentum` (−0.02) | Balance / stability | roller env |
+| `return_pose` (end of phase) | Converge to the standing roller pose for a clean handover | adapted from `ground_pick_return_pose` |
+| `feet_flat` (−2) | Blades flat → stable glide | roller env |
+| `action_rate_l2`, `neck_action_rate_l2`, `joint_torques_l2`, `self_collisions` | Smoothing / sim2real transfer | both envs |
 
-**Explicitement PAS inclus :** `braking` (on ne veut pas s'arrêter), `mouth_ground_proximity`
-/ `mouth_perpendicular_to_ground` (on ne touche pas le sol), `skating_air_time` /
-`single_support` / `glide` (pas de stride pendant le trick — on glisse passivement).
+**Explicitly NOT included:** `braking` (we do not want to stop), `mouth_ground_proximity`
+/ `mouth_perpendicular_to_ground` (we do not touch the ground), `skating_air_time` /
+`single_support` / `glide` (no stride during the trick — we glide passively).
 
-## Entraînement
+## Training
 
-- `MicroduckRollerCrouchRlCfg` = copie de `MicroduckRollersRlCfg`
+- `MicroduckRollerCrouchRlCfg` = a copy of `MicroduckRollersRlCfg`
   (MLP 512/256/128, ELU, obs_normalization, PPO, `experiment_name="roller_crouch"`).
-- Enregistrer dans `tasks/__init__.py` :
+- Register in `tasks/__init__.py`:
   `register_mjlab_task(task_id="Mjlab-RollerCrouch-Flat-MicroDuck", ...)`.
-- Lancer :
+- Launch:
   ```bash
   uv run train Mjlab-RollerCrouch-Flat-MicroDuck \
     --env.scene.num-envs 4096 --agent.max_iterations 8000
   ```
-- Épisodes démarrés avec une **vitesse d'entrée réaliste** (le robot arrive en roulant),
-  sinon il n'aura pas d'élan à conserver pendant l'accroupi. À câbler via un event de
-  reset (vitesse initiale non nulle) ou un push au début d'épisode.
+- Episodes started with a **realistic entry velocity** (the robot arrives already rolling),
+  otherwise it will have no momentum to preserve during the crouch. To be wired through a
+  reset event (non-zero initial velocity) or a push at the start of the episode.
 
-## Export + déploiement (flags runtime exacts)
+## Export + deployment (exact runtime flags)
 
-Export ONNX (le normaliseur est baké par `export.py`), puis :
+ONNX export (the normalizer is baked in by `export.py`), then:
 
 ```bash
 microduck_runtime --variant pre-alpha --new-cmd-obs --roller \
@@ -128,31 +128,31 @@ microduck_runtime --variant pre-alpha --new-cmd-obs --roller \
   --ground-pick-action-scale 0.8
 ```
 
-Bouton **A** → crouch-glide, puis retour auto à la policy roller.
+Button **A** → crouch-glide, then automatic return to the roller policy.
 
-**Pièges de parité entraînement/déploiement (importants pour le sim2real) :**
-- `--ground-pick-kp-ratio 1.0` : le défaut est **0.6** (baisse kp à 120 pendant le trick).
-  On entraîne à kp=200 → il faut forcer **1.0** pour que ça corresponde.
-- `--ground-pick-action-scale` doit matcher l'`action_scale` d'entraînement (0.8 ci-dessus).
-- `--ground-pick-period 5.0` doit matcher la période/longueur de mouvement entraînée
-  (défaut 4.0, on le garde).
+**Training/deployment parity pitfalls (important for sim2real):**
+- `--ground-pick-kp-ratio 1.0`: the default is **0.6** (it lowers kp to 120 during the trick).
+  We train at kp=200 → we must force **1.0** to match.
+- `--ground-pick-action-scale` must match the training `action_scale` (0.8 above).
+- `--ground-pick-period 5.0` must match the trained period/motion length
+  (the default is 4.0; we keep ours).
 
-## Risques et vérification
+## Risks and verification
 
-- **One-shot, durée fixe :** l'accroupi dure `ground-pick-period` puis remonte tout seul.
-  Pas de maintien libre — limite acceptée de l'approche B.
-- **Élan pendant le trick :** la phase remplace la commande de vitesse → **pas de poussée
-  active** pendant l'accroupi. Si l'élan d'entrée est trop faible, il ralentit. D'où
-  l'entraînement avec vitesse d'entrée réaliste.
-- **Vérification :**
-  1. En sim (`play`) : il descend, garde les roues qui tournent pendant le palier,
-     se relève sans tomber, et la pose finale rejoint proprement la pose roller debout.
-  2. Sur le vrai robot : lancer à petite vitesse, appuyer sur A, observer.
-  3. Confirmer que la policy roller reprend la main proprement après le retour.
+- **One-shot, fixed duration:** the crouch lasts `ground-pick-period` then rises by itself.
+  No free hold — an accepted limitation of approach B.
+- **Momentum during the trick:** the phase replaces the velocity command → **no active push**
+  during the crouch. If the entry momentum is too low, it slows down. Hence
+  training with a realistic entry velocity.
+- **Verification:**
+  1. In sim (`play`): it goes down, keeps the wheels turning during the plateau,
+     stands back up without falling, and the final pose cleanly rejoins the standing roller pose.
+  2. On the real robot: launch at low speed, press A, observe.
+  3. Confirm that the roller policy cleanly takes back control after the return.
 
-## Questions ouvertes / à confirmer pendant l'implémentation
+## Open questions / to confirm during implementation
 
-- Valeur exacte de `height_low` (accroupi) — à régler en play.
-- Meilleure façon d'injecter la vitesse d'entrée à l'épisode (event reset vs push initial).
-- Poids relatif `wheel_speed` vs `crouch_glide_height_by_phase` (garder l'élan sans
-  empêcher de s'accroupir).
+- The exact value of `height_low` (crouched) — to be tuned at play time.
+- The best way to inject the entry velocity at episode start (reset event vs initial push).
+- The relative weight of `wheel_speed` vs `crouch_glide_height_by_phase` (keep the momentum
+  without preventing the crouch).

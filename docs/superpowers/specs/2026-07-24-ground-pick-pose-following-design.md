@@ -1,42 +1,42 @@
-# Ground-pick par suivi de pose interpolée par la phase
+# Ground-pick by phase-interpolated pose following
 
-**Date** : 2026-07-24
-**Branche** : `new_pre_alpha_ground_pick`
-**Fichier cible** : `src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py` (réécriture en place)
-**Task id** : `Mjlab-GroundPick-Flat-MicroDuck` (inchangé)
+**Date**: 2026-07-24
+**Branch**: `new_pre_alpha_ground_pick`
+**Target file**: `src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py` (rewritten in place)
+**Task id**: `Mjlab-GroundPick-Flat-MicroDuck` (unchanged)
 
-## 1. Objectif
+## 1. Objective
 
-Remplacer l'objectif *espace-tâche* du ground_pick actuel (récompense la bouche
-qui descend au sol, puis récompense séparément le retour debout) par un objectif
-**directif de suivi de pose** : on définit deux poses articulaires cibles — STAND
-et DOWN — et on récompense le suivi de la **pose interpolée par la phase**
+Replace the current ground_pick's *task-space* objective (reward the mouth going
+down to the ground, then separately reward the return to standing) with a
+**directive pose-following objective**: we define two target joint poses — STAND
+and DOWN — and reward tracking of the **phase-interpolated pose**
 (STAND→DOWN→STAND).
 
-Motivation (reprise de l'approche roller_crouch, validée) : l'objectif par pose
-interpolée est **symétrique par construction** — le « se relever » (cible → STAND)
-est récompensé exactement comme le « se baisser » (cible → DOWN), ce qui règle le
-problème d'optimum paresseux où la policy descend mais remonte mal. Le signal est
-**dense à chaque phase** (cible qui bouge en continu), contrairement à une cible
-fixe pondérée par `sin` qui ne donne aucun signal aux transitions.
+Motivation (taken from the roller_crouch approach, which is validated): the
+interpolated-pose objective is **symmetric by construction** — "standing back up"
+(target → STAND) is rewarded exactly like "going down" (target → DOWN), which
+fixes the lazy-optimum problem where the policy goes down but comes back up
+poorly. The signal is **dense at every phase** (a continuously moving target),
+unlike a fixed target weighted by `sin`, which gives no signal at the transitions.
 
-Le geste reste déclenché au **bouton A** via le slot `--ground-pick` du runtime
-(one-shot, retour auto à la policy principale). Obs 61D unifié inchangé →
-policy interchangeable dans le slot.
+The gesture stays triggered by **button A** through the runtime's `--ground-pick`
+slot (one-shot, automatic return to the main policy). The unified 61D obs is
+unchanged → the policy stays hot-swappable in the slot.
 
-## 2. Poses cibles
+## 2. Target poses
 
-Résolution des joints **PAR NOM** (`asset.find_joints([name])`) — robuste, cohérent
-avec l'approche roller. 14 joints (mouth exclu).
+Joints resolved **BY NAME** (`asset.find_joints([name])`) — robust, and consistent
+with the roller approach. 14 joints (mouth excluded).
 
-- **STAND_POSE** = HOME (`default_joint_pos` du modèle). Source du blend ; ne pas
-  la redéfinir en dur — utiliser le défaut du modèle comme source (blend=0).
-  Au déploiement, la policy principale reprend depuis HOME → retour propre.
+- **STAND_POSE** = HOME (the model's `default_joint_pos`). The blend source; do not
+  redefine it by hand — use the model default as the source (blend=0).
+  At deployment, the main policy resumes from HOME → clean return.
 
-- **DOWN_POSE** = valeurs initiales issues du **keyframe FOLD** de `scene_walk.xml`
-  (pli avant profond, tête baissée → bouche vers le sol). Dict par nom en tête de
-  fichier, **commenté comme remplaçable par une lecture `read_pose.py`** du vrai
-  robot posé bouche-au-sol. Valeurs de départ :
+- **DOWN_POSE** = initial values taken from the **FOLD keyframe** of `scene_walk.xml`
+  (deep forward fold, head down → mouth toward the ground). A by-name dict at the top of
+  the file, **commented as replaceable with a `read_pose.py` reading** of the real
+  robot placed mouth-to-ground. Starting values:
 
   ```python
   DOWN_POSE = {
@@ -48,114 +48,113 @@ avec l'approche roller. 14 joints (mouth exclu).
   }
   ```
 
-## 3. Profil de phase (4 segments)
+## 3. Phase profile (4 segments)
 
-Commande `GroundPickPhaseCommand` : `[cos(2πφ), sin(2πφ), 0]`, période **4.0 s**
-(défaut du slot runtime → pas de flag période à changer au déploiement).
+`GroundPickPhaseCommand` command: `[cos(2πφ), sin(2πφ), 0]`, period **4.0 s**
+(the runtime slot's default → no period flag to change at deployment).
 
 ```
-DESCENT_END=0.15  HOLD_END=0.50  RISE_END=0.65   (période 4 s)
-[0, 0.15)     descente  STAND->DOWN   ~0.6 s   blend 0->1
-[0.15, 0.50)  bas       DOWN          ~1.4 s   blend 1
-[0.50, 0.65)  remontée  DOWN->STAND   ~0.6 s   blend 1->0
-[0.65, 1.0)   haut      STAND (repos) ~1.4 s   blend 0
+DESCENT_END=0.15  HOLD_END=0.50  RISE_END=0.65   (4 s period)
+[0, 0.15)     descent  STAND->DOWN   ~0.6 s   blend 0->1
+[0.15, 0.50)  low      DOWN          ~1.4 s   blend 1
+[0.50, 0.65)  rise     DOWN->STAND   ~0.6 s   blend 1->0
+[0.65, 1.0)   high     STAND (rest)  ~1.4 s   blend 0
 ```
 
-`blend ∈ [0,1]` : 0 = STAND (HOME), 1 = DOWN. Cible = `stand + blend·(down - stand)`.
-Bornes tunables (constantes en tête de fichier).
+`blend ∈ [0,1]`: 0 = STAND (HOME), 1 = DOWN. Target = `stand + blend·(down - stand)`.
+Tunable bounds (constants at the top of the file).
 
-**`randomize_phase=False`** : chaque épisode démarre à φ=0 (= debout), comme le
-déclenchement bouton A au déploiement. Les épisodes se réinitialisant à des
-instants échelonnés, les envs se décorrèlent naturellement en phase (pas besoin de
-randomiser). Nécessite d'ajouter un flag `randomize_phase` à
-`GroundPickPhaseCommandCfg` (défaut `True` → autres tâches sit/stand inchangées),
-honoré dans `reset()`.
+**`randomize_phase=False`**: every episode starts at φ=0 (= standing), like the
+button-A trigger at deployment. Since episodes reset at staggered times, the envs
+naturally decorrelate in phase (no need to randomize). This requires adding a
+`randomize_phase` flag to `GroundPickPhaseCommandCfg` (default `True` → the other
+sit/stand tasks are unchanged), honored in `reset()`.
 
-## 4. Nouvelles fonctions mdp (portées de roller, adaptées, par nom)
+## 4. New mdp functions (ported from roller, adapted, by name)
 
-Dans `src/mjlab_microduck/tasks/mdp.py`. Noms distincts du `phase_pose_match`
-existant (qui est la variante cible-fixe-pondérée-sin) pour éviter la confusion.
+In `src/mjlab_microduck/tasks/mdp.py`. Names deliberately distinct from the existing
+`phase_pose_match` (which is the fixed-target, sin-weighted variant) to avoid confusion.
 
-- **`phase_pose_blend(phase, descent_end, hold_end, rise_end) -> Tensor`** — pur,
-  blend 4 segments 0..1 (testable en isolation).
+- **`phase_pose_blend(phase, descent_end, hold_end, rise_end) -> Tensor`** — pure,
+  4-segment blend 0..1 (testable in isolation).
 - **`_phase_pose_error(env, asset_cfg, command_name, target_pose, descent_end,
-  hold_end, rise_end, source_pose=None) -> (cur, target)`** — résout les joints par
-  nom ; `source_pose` = HOME (`default_joint_pos`) si `None` ; calcule
-  `phase = atan2(sin,cos)/2π % 1`, `blend`, puis `target = source + blend·(target_pose - source)`.
+  hold_end, rise_end, source_pose=None) -> (cur, target)`** — resolves joints by
+  name; `source_pose` = HOME (`default_joint_pos`) if `None`; computes
+  `phase = atan2(sin,cos)/2π % 1`, `blend`, then `target = source + blend·(target_pose - source)`.
 - **`phase_pose_track(env, command_name, target_pose, source_pose=None, std=0.3,
-  descent_end, hold_end, rise_end, asset_cfg) -> Tensor`** — gaussienne
+  descent_end, hold_end, rise_end, asset_cfg) -> Tensor`** — gaussian
   `exp(-((cur-target)/std)²).mean(-1)`.
-- **`phase_pose_track_l1(env, ...même args sans std...) -> Tensor`** — bootstrap
-  `-(cur-target).abs().mean(-1)` (gradient constant quand la gaussienne sature).
+- **`phase_pose_track_l1(env, ...same args without std...) -> Tensor`** — bootstrap
+  `-(cur-target).abs().mean(-1)` (constant gradient when the gaussian saturates).
 
-`target_pose` = `DOWN_POSE` (dict par nom). `source_pose=None` → HOME.
+`target_pose` = `DOWN_POSE` (by-name dict). `source_pose=None` → HOME.
 
 ## 5. Rewards
 
-Réécriture minimale par rapport à l'actuel — on remplace la mécanique de retour de
-pose, on garde la stabilité/régul/sim2real.
+A minimal rewrite relative to the current one — we replace the pose-return
+machinery and keep the stability/regularization/sim2real stack.
 
-| Reward | Poids | Statut | Rôle |
+| Reward | Weight | Status | Role |
 |---|---|---|---|
-| `phase_pose_track` (std 0.3) | **6.0** | **NOUVEAU** | suivi pose interpolée STAND↔DOWN |
-| `phase_pose_track_l1` | **2.0** | **NOUVEAU** | bootstrap L1 |
-| `mouth_ground_proximity` (std 0.10) | **1.0** | retune (était 2.0) | filet : garantit la bouche au sol si DOWN imparfaite ; gaté approche (+sin) |
-| `upright` | 0.2 | gardé | tronc ~vertical (faible, le robot penche) |
-| `feet_grounded` | 3.0 | gardé | 2 pieds au sol pendant tout le geste |
-| `self_collisions` | -1.0 | gardé | |
-| `head_impact_penalty` (seuil 2 N) | -0.5 | gardé | pas de slam tête (DOWN amène la tête bas) |
-| `action_rate_l2` | -0.8→-2.0 (curric) | gardé | lissage |
-| `neck_action_rate_l2` | -1.0 | gardé | |
-| `joint_torques_l2` | -5e-3 | gardé | |
-| `body_ang_vel` | -0.05 | gardé | |
-| `angular_momentum` | -0.02 | gardé | |
-| `soft_landing` | -1e-5 | gardé | |
+| `phase_pose_track` (std 0.3) | **6.0** | **NEW** | tracks the interpolated STAND↔DOWN pose |
+| `phase_pose_track_l1` | **2.0** | **NEW** | L1 bootstrap |
+| `mouth_ground_proximity` (std 0.10) | **1.0** | retuned (was 2.0) | safety net: guarantees the mouth reaches the ground if DOWN is imperfect; gated on the approach (+sin) |
+| `upright` | 0.2 | kept | trunk ~vertical (low weight, the robot leans) |
+| `feet_grounded` | 3.0 | kept | both feet on the ground throughout the gesture |
+| `self_collisions` | -1.0 | kept | |
+| `head_impact_penalty` (threshold 2 N) | -0.5 | kept | no head slam (DOWN brings the head low) |
+| `action_rate_l2` | -0.8→-2.0 (curric) | kept | smoothing |
+| `neck_action_rate_l2` | -1.0 | kept | |
+| `joint_torques_l2` | -5e-3 | kept | |
+| `body_ang_vel` | -0.05 | kept | |
+| `angular_momentum` | -0.02 | kept | |
+| `soft_landing` | -1e-5 | kept | |
 
-**Retirées** : `mouth_perpendicular_to_ground`, `ground_pick_return_pose_legs`,
-`ground_pick_return_pose_neck` (remplacées par le suivi de pose).
+**Removed**: `mouth_perpendicular_to_ground`, `ground_pick_return_pose_legs`,
+`ground_pick_return_pose_neck` (replaced by pose following).
 
-Tout le reste **inchangé** : bloc DR (CoM/head-CoM/mass-inertia/friction/armature/
-IMU-misalign/encoder-bias/pushes), obs 61D + padding head/body zéro, terminaisons
-(`nan_state`), curricula (`action_rate_weight`, `com_range`, `head_com_range`),
-RlCfg (`experiment_name="ground_pick"`).
+Everything else is **unchanged**: the DR block (CoM/head-CoM/mass-inertia/friction/armature/
+IMU-misalign/encoder-bias/pushes), the 61D obs + zero head/body padding, the terminations
+(`nan_state`), the curricula (`action_rate_weight`, `com_range`, `head_com_range`),
+and the RlCfg (`experiment_name="ground_pick"`).
 
-## 6. Déploiement (parité sim2real)
+## 6. Deployment (sim2real parity)
 
 ```bash
 microduck_runtime ... \
   --ground-pick ground_pick.onnx \
-  --ground-pick-period 4.0 \       # = période env (défaut, rien à changer)
-  --ground-pick-kp-ratio 1.0 \     # entraîné kp 200 → forcer 1.0 (défaut 0.6 baisse à 120)
-  --ground-pick-action-scale 1.0   # = action.scale env
+  --ground-pick-period 4.0 \       # = env period (the default, nothing to change)
+  --ground-pick-kp-ratio 1.0 \     # trained at kp 200 → force 1.0 (the 0.6 default lowers it to 120)
+  --ground-pick-action-scale 1.0   # = env action.scale
 ```
 
 ## 7. Tests
 
-`tests/` (lancer `uv run --with pytest pytest tests/ -q`) :
+In `tests/` (run `uv run --with pytest pytest tests/ -q`):
 
-- **Fonctions pures** : `phase_pose_blend` aux points clés
-  (φ=0→0, φ=0.075→0.5, φ=0.3→1, φ=0.575→0.5, φ=0.8→0, monotone par segment) ;
-  `phase_pose_track`/`_l1` : valeur max (cur==target) et signe.
-- **Construction de l'env** : `make_microduck_ground_pick_env_cfg()` construit ;
-  commande = `GroundPickPhaseCommand` avec `randomize_phase=False`, `period=4.0` ;
-  rewards `phase_pose_track`/`phase_pose_track_l1` présents ;
-  `mouth_perpendicular_to_ground`/`ground_pick_return_pose_*` absents ;
-  `mouth_ground_proximity` présent poids 1.0.
+- **Pure functions**: `phase_pose_blend` at the key points
+  (φ=0→0, φ=0.075→0.5, φ=0.3→1, φ=0.575→0.5, φ=0.8→0, monotone per segment);
+  `phase_pose_track`/`_l1`: maximum value (cur==target) and sign.
+- **Env construction**: `make_microduck_ground_pick_env_cfg()` builds;
+  the command is a `GroundPickPhaseCommand` with `randomize_phase=False`, `period=4.0`;
+  the `phase_pose_track`/`phase_pose_track_l1` rewards are present;
+  `mouth_perpendicular_to_ground`/`ground_pick_return_pose_*` are absent;
+  `mouth_ground_proximity` is present with weight 1.0.
 
-## 8. Entraînement / play / export
+## 8. Training / play / export
 
 ```bash
 uv run train Mjlab-GroundPick-Flat-MicroDuck --env.scene.num-envs 4096 --agent.max_iterations 20000
 uv run scripts/play_latest.py     # md-play
-uv run scripts/export_latest.py   # normaliseur baké dans l'ONNX
+uv run scripts/export_latest.py   # normalizer baked into the ONNX
 ```
-Surveiller `Episode_Reward/phase_pose_track` (doit monter).
+Watch `Episode_Reward/phase_pose_track` (it must rise).
 
-## 9. Hors scope / notes
+## 9. Out of scope / notes
 
-- **Doublon `pose_target_match`** (mdp.py 1577 et 1914) : latent, non traité ici.
-- **Ajustement DOWN_POSE** : si la bouche ne touche pas assez le sol avec les
-  valeurs FOLD, ajuster le dict (idéalement lecture `read_pose.py` du vrai robot
-  posé bouche-au-sol) plutôt que de gonfler `mouth_ground_proximity`.
-- **Transition au déploiement** : STAND=HOME = neutre de la policy principale →
-  pas d'à-coup au retour (contrairement au souci noté sur roller où STAND≠HOME).
+- **Duplicate `pose_target_match`** (mdp.py 1577 and 1914): latent, not addressed here.
+- **Tuning DOWN_POSE**: if the mouth does not reach the ground closely enough with the
+  FOLD values, adjust the dict (ideally a `read_pose.py` reading of the real robot
+  placed mouth-to-ground) rather than inflating `mouth_ground_proximity`.
+- **Transition at deployment**: STAND=HOME = the main policy's neutral →
+  no jolt on return (unlike the issue noted on roller, where STAND≠HOME).

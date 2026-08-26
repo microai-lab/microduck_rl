@@ -198,7 +198,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Roller STANDUP — se relever sur rollers (policy dédiée, départ au sol).
+# Roller STANDUP — standing up on rollers (dedicated policy, starts on the ground).
 register_mjlab_task(
     task_id="Mjlab-RollerStandUp-Flat-MicroDuck",
     env_cfg=make_microduck_roller_standup_env_cfg(),
