@@ -140,7 +140,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         weight=6.0,
         params={"command_name": "twist", "std": 1.5, **_ENVELOPE},
     )
-    # Bootstrap L1 : gradient constant quand la gaussienne sature loin de la cible.
+    # L1 bootstrap: constant gradient when the gaussian saturates far from the target.
     cfg.rewards["spin_rate_l1"] = RewardTermCfg(
         func=microduck_mdp.spin_rate_l1,
         weight=0.5,

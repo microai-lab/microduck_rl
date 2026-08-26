@@ -1273,12 +1273,12 @@ def crouch_pose_blend(
     hold_end: float,
     rise_end: float,
 ) -> torch.Tensor:
-    """Blend 0..1 le long de la phase [0,1) — 0 = pose debout, 1 = pose accroupie.
+    """Blend 0..1 along the phase [0,1) — 0 = standing pose, 1 = crouched pose.
 
-    [0, descent_end)      : 0 -> 1  (se baisser)
-    [descent_end, hold_end): 1      (bas / accroupi)
-    [hold_end, rise_end)  : 1 -> 0  (se lever)
-    [rise_end, 1.0)       : 0       (haut / debout, repos)
+    [0, descent_end)      : 0 -> 1  (crouch down)
+    [descent_end, hold_end): 1      (low / crouched)
+    [hold_end, rise_end)  : 1 -> 0  (stand up)
+    [rise_end, 1.0)       : 0       (high / standing, rest)
     """
     b = torch.zeros_like(phase)
     descend = phase < descent_end
@@ -2577,12 +2577,12 @@ def phase_pose_blend(
     hold_end: float,
     rise_end: float,
 ) -> torch.Tensor:
-    """Blend 0..1 le long de la phase [0,1) — 0 = pose STAND, 1 = pose DOWN.
+    """Blend 0..1 along the phase [0,1) — 0 = STAND pose, 1 = DOWN pose.
 
-    [0, descent_end)       : 0 -> 1  (se baisser)
-    [descent_end, hold_end): 1       (bas)
-    [hold_end, rise_end)   : 1 -> 0  (se lever)
-    [rise_end, 1.0)        : 0       (haut / repos)
+    [0, descent_end)       : 0 -> 1  (go down)
+    [descent_end, hold_end): 1       (low)
+    [hold_end, rise_end)   : 1 -> 0  (rise)
+    [rise_end, 1.0)        : 0       (high / rest)
     """
     b = torch.zeros_like(phase)
     descend = phase < descent_end
