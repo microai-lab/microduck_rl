@@ -221,6 +221,17 @@ Never launch a long run without one.
 - A fresh `uv sync` is the ground truth (HF Jobs run one): anything that only
   works via manually-installed local packages will die remotely. Keep
   `pyproject.toml` honest.
+- **Wheels are per-architecture.** On linux-`aarch64` (DGX Spark / GB10) PyPI's
+  torch wheel is CPU-ONLY (`2.9.1+cpu`, `torch.version.cuda is None`), so
+  `torch.cuda.device_count() == 0` and mjlab's `select_gpus()` indexes an empty
+  list → `IndexError` before iteration 0. `[tool.uv.sources]` routes torch to
+  the cu129 index for `aarch64` only (cu129 matches the CUDA toolkit warp
+  bundles; x86_64/HF Jobs stay on PyPI). Two silent break points, both locked
+  by `tests/test_aarch64_cuda_torch.py`: torch must stay a DIRECT dependency
+  (uv applies `[tool.uv.sources]` to direct deps only — deleting the
+  redundant-looking `torch==` pin makes the routing a no-op), and the pin must
+  stay `==`, since the CUDA index carries newer builds than PyPI (a `>=`
+  silently dragged torch 2.9.1 → 2.13.0).
 - Physics-aligned limits: a 25 cm robot tumbles at 3.5–5.5 rad/s NATURALLY —
   don't impose human-scale speed intuitions via caps; put anti-violence
   pressure on impacts and thrash (|a_z|, action_rate, support gates), not on
