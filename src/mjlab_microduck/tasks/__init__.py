@@ -207,7 +207,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Spin task — rotation rapide sur place, sur rollers (slot ground-pick).
+# Spin task — fast spin in place, on rollers (ground-pick slot).
 register_mjlab_task(
     task_id="Mjlab-Spin-Flat-MicroDuck",
     env_cfg=make_microduck_spin_env_cfg(),

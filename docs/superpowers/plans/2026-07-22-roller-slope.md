@@ -129,7 +129,7 @@ git commit -m "roller-slope: ramp angle by difficulty (pure function + tests)"
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_slope_terrain.py  (ajouter)
+# tests/test_slope_terrain.py  (add)
 import mujoco
 import numpy as np
 from mjlab_microduck.tasks.slope_terrain import FlatRampTerrainCfg

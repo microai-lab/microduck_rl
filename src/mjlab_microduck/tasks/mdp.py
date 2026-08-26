@@ -3127,7 +3127,7 @@ def apply_mouth_payload_force(
     p_com = asset.data.body_com_pos_w[:, bid, :]         # (N,3)
     F = torch.zeros((env.num_envs, 3), device=env.device, dtype=p_mouth.dtype)
     F[:, 2] = fz
-    tau = torch.cross(p_mouth - p_com, F, dim=-1)        # applique F au mouth_tip
+    tau = torch.cross(p_mouth - p_com, F, dim=-1)        # applies F at the mouth_tip
     asset.write_external_wrench_to_sim(
         forces=F.unsqueeze(1), torques=tau.unsqueeze(1), body_ids=[bid],
     )

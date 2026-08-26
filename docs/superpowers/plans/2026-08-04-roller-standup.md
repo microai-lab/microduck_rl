@@ -177,7 +177,7 @@ def test_task_is_registered():
 ```bash
 uv run --with pytest pytest tests/test_roller_standup_cfg.py -q
 ```
-Expected: erreur de collecte, `ModuleNotFoundError: No module named 'mjlab_microduck.tasks.microduck_roller_standup_env_cfg'`.
+Expected: a collection error, `ModuleNotFoundError: No module named 'mjlab_microduck.tasks.microduck_roller_standup_env_cfg'`.
 
 - [ ] **Step 3: Create the env file**
 
@@ -866,7 +866,7 @@ Expected: 20 passed.
 ```bash
 git add src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py \
         tests/test_roller_standup_cfg.py
-git commit -m "roller-standup: depart au sol (ventre/dos/debout) + curriculum des poses"
+git commit -m "roller-standup: ground starts (belly/back/standing) + pose curriculum"
 ```
 
 ---
@@ -968,9 +968,9 @@ uv run --with pytest pytest tests/test_roller_standup_cfg.py -q
 ```
 Expected: `test_wheel_friction_curriculum_is_decreasing` fails on `assert lows == sorted(lows, reverse=True)` (the roller env ramps 0 → 0.0015), `test_wheel_friction_event_starts_at_stage_zero` fails, `test_action_rate_ramp_is_the_standup_one_not_the_roller_one` fails on `[-1.0, -1.5, -2.0] != [-0.4, -0.8, -1.0]`, and `test_push_curriculum_ramps_from_zero` fails on `KeyError: 'push_magnitude'`. `test_inherited_dr_curricula_survive` already passes (a non-regression check).
 
-- [ ] **Step 3 : Remplacer les curricula**
+- [ ] **Step 3: Replace the curricula**
 
-In `microduck_roller_standup_env_cfg.py`, insert this block **after** the `ground_state_mix` curriculum et **avant** le `return cfg` :
+In `microduck_roller_standup_env_cfg.py`, insert this block **after** the `ground_state_mix` curriculum and **before** the `return cfg`:
 
 ```python
     # ── REVERSED rolling friction: braked → free ─────────────────────────────
@@ -1005,7 +1005,7 @@ In `microduck_roller_standup_env_cfg.py`, insert this block **after** the `groun
     # The event's STARTING value must match stage 0: the curriculum is only
     # evaluated from the first step onward, otherwise the very first resets
     # would use the (0, 0) inherited from the roller env — FREE wheels during
-    # le bootstrap, soit exactement l'inverse du but.
+    # the bootstrap, i.e. exactly the opposite of the goal.
     cfg.events["randomize_wheel_friction"].params["ranges"] = _WHEEL_FRICTION_STAGE0
 
     # ── action_rate: standup's ramp, not the roller's ────────────────────────
@@ -1065,7 +1065,7 @@ Expected: `4 failed, 71 passed` — only the 4 pre-existing failures in `tests/t
 ```bash
 git add src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py \
         tests/test_roller_standup_cfg.py
-git commit -m "roller-standup: curriculum de friction de roulement inverse + pousses rampees"
+git commit -m "roller-standup: reverse wheel-friction curriculum + ramped pushes"
 ```
 
 ---
@@ -1076,7 +1076,7 @@ The Task 1–4 tests are **static**: they check the config, not execution. They 
 
 **Files:**
 - Create: `docs/roller_standup_policy_summary.md`
-- (aucune modification de code attendue si tout passe)
+- (no code change expected if everything passes)
 
 **Interfaces:**
 - Consumes: the registered task `Mjlab-RollerStandUp-Flat-MicroDuck` (Task 1) and the complete env (Tasks 2–4).
@@ -1095,8 +1095,8 @@ uv run train Mjlab-RollerStandUp-Flat-MicroDuck \
 
 Expected: `✓ RollerStandUp task registered: Mjlab-RollerStandUp-Flat-MicroDuck`, then 3 iterations that run without an exception, with a reward table showing the terms `pose_stand_legs`, `height_stand`, `standing_composite`, etc.
 
-Erreurs plausibles et leur cause :
-- `IndexError` on `joint_pos[:, joint_indices]` → the `_LEG_JOINTS` indices exceed the number de joints ; relire Task 2.
+Plausible errors and their cause:
+- `IndexError` on `joint_pos[:, joint_indices]` → the `_LEG_JOINTS` indices exceed the number of joints; re-read Task 2.
 - `TypeError: ... unexpected keyword argument` → a parameter name does not match the mdp function's signature; compare with Task 2's **Interfaces** block.
 - `KeyError` on a sensor name → a removed reward was the only user of a sensor, or a kept reward requires one that is missing.
 

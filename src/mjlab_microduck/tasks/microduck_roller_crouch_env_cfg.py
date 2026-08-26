@@ -18,7 +18,7 @@ from copy import deepcopy
 
 ENABLE_SYMMETRY = False
 
-# DR — repris du roller env
+# DR — taken from the roller env
 ENABLE_COM_RANDOMIZATION             = True
 ENABLE_HEAD_COM_RANDOMIZATION        = True
 ENABLE_MASS_INERTIA_RANDOMIZATION    = True
