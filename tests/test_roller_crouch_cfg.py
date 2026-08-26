@@ -21,13 +21,13 @@ def test_cfg_has_crouch_and_forward_rewards():
     assert "crouch_glide_pose" in cfg.rewards
     assert "crouch_glide_pose_l1" in cfg.rewards
     assert "forward_speed" in cfg.rewards
-    # léger penché avant pendant l'accroupi (cible positive = vers l'avant)
+    # slight forward lean during the crouch (positive target = forward)
     assert "crouch_forward_lean" in cfg.rewards
     assert cfg.rewards["crouch_forward_lean"].params["target_pitch"] > 0.0
     # the crouch pose is carried by-name and includes the leg fold
     cp = cfg.rewards["crouch_glide_pose"].params["crouch_pose"]
     assert "left_knee" in cp and "right_knee" in cp
-    # rewards de patinage actif retirées (pas de stride pendant le trick)
+    # active skating rewards removed (no stride during the trick)
     for gone in ("braking", "skating_air_time", "single_support", "glide", "wheel_speed"):
         assert gone not in cfg.rewards
 

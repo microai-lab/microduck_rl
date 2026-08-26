@@ -24,9 +24,9 @@ def test_command_is_neutralised():
 
 
 def test_rolling_entry_no_base_push():
-    # élan donné en ROULEMENT (reset_rolling_entry), pas en poussée de base
-    # (base seule + roues immobiles = à-coup de patinage). Donc reset_base ne
-    # met aucune vitesse de base.
+    # momentum given as ROLLING (reset_rolling_entry), not as a base push (base
+    # alone + stationary wheels = skidding jolt). So reset_base sets no base
+    # velocity at all.
     cfg = make_microduck_roller_slope_env_cfg()
     assert cfg.events["reset_base"].params["velocity_range"] == {}
     assert "reset_rolling_entry" in cfg.events
@@ -35,15 +35,15 @@ def test_rolling_entry_no_base_push():
 
 
 def test_has_heading_hold_reward():
-    # aller droit : maintien du yaw de spawn
+    # go straight: hold the spawn yaw
     cfg = make_microduck_roller_slope_env_cfg()
     assert "heading_hold" in cfg.rewards
     assert cfg.rewards["heading_hold"].weight > 0.0
 
 
 def test_balance_rewards_no_fixed_pose():
-    # équilibre libre : upright/alive/glisse présents, mais PAS de pose fixe
-    # imposée (il doit pouvoir bouger son centre de gravité pour tenir la pente).
+    # free balance: upright/alive/glide present, but NO imposed fixed pose (it
+    # must be able to move its center of gravity to hold the slope).
     cfg = make_microduck_roller_slope_env_cfg()
     for name in ("upright", "alive", "feet_flat", "wheel_glide", "neck_joint_pos_l2"):
         assert name in cfg.rewards
@@ -52,8 +52,8 @@ def test_balance_rewards_no_fixed_pose():
 
 
 def test_has_wheel_glide_reward_not_base_speed():
-    # "se laisser glisser" = rouler (roues), pas récompenser la vitesse de base
-    # (qu'il atteignait en courant). wheel_glide présent, descent_speed absent.
+    # "letting itself glide" = rolling (wheels), not rewarding base speed (which
+    # it reached by running). wheel_glide present, descent_speed absent.
     cfg = make_microduck_roller_slope_env_cfg()
     assert "wheel_glide" in cfg.rewards
     assert cfg.rewards["wheel_glide"].weight > 0.0
@@ -61,15 +61,15 @@ def test_has_wheel_glide_reward_not_base_speed():
 
 
 def test_no_roller_skating_rewards_survive():
-    # les rewards de PATINAGE du roller ne doivent pas survivre (heading_hold est
-    # ré-ajouté volontairement pour aller droit, donc pas dans cette liste).
+    # the roller's SKATING rewards must not survive (heading_hold is deliberately
+    # re-added to go straight, hence not in this list).
     cfg = make_microduck_roller_slope_env_cfg()
     for name in ("wheel_speed", "braking", "skating_air_time", "glide", "forward_lean"):
         assert name not in cfg.rewards
 
 
 def test_spawn_yaw_faces_downhill():
-    # yaw fixe à 0 : toujours face au bas de la pente (+x), pas le -pi/+pi hérité
+    # yaw fixed at 0: always facing downhill (+x), not the inherited -pi/+pi
     cfg = make_microduck_roller_slope_env_cfg()
     assert cfg.events["reset_base"].params["pose_range"]["yaw"] == (0.0, 0.0)
 
@@ -78,27 +78,27 @@ def test_void_termination_present_no_edge_termination():
     cfg = make_microduck_roller_slope_env_cfg()
     assert "fell_into_void" in cfg.terminations
     assert "fell_over" in cfg.terminations
-    # plus de terminaison « bord de terrain » (remplacée par le plat de sortie)
+    # no more "terrain edge" termination (replaced by the flat runout)
     assert "reached_bottom" not in cfg.terminations
     assert "out_of_terrain_bounds" not in cfg.terminations
 
 
 def test_obs_nan_policy_sanitize():
-    # obs assainies : un NaN de contact rare ne doit pas tuer l'entraînement
+    # sanitized obs: a rare contact NaN must not kill training
     cfg = make_microduck_roller_slope_env_cfg()
     assert cfg.observations["actor"].nan_policy == "sanitize"
     assert cfg.observations["critic"].nan_policy == "sanitize"
 
 
 def test_curriculum_present_and_starts_gentle():
-    # curriculum doux->raide : démarre sur la rampe la plus douce, promotion active
-    cfg = make_microduck_roller_slope_env_cfg()  # play=False (entraînement)
+    # gentle->steep curriculum: starts on the gentlest ramp, promotion enabled
+    cfg = make_microduck_roller_slope_env_cfg()  # play=False (training)
     assert "terrain_levels" in cfg.curriculum
     assert cfg.scene.terrain.max_init_terrain_level == 0
 
 
 def test_terrain_tile_fits_geometry():
-    # la tuile doit contenir plat + rampe_max + sortie
+    # the tile must fit flat + ramp_max + runout
     cfg = make_microduck_roller_slope_env_cfg()
     gen = cfg.scene.terrain.terrain_generator
     st = next(iter(gen.sub_terrains.values()))
