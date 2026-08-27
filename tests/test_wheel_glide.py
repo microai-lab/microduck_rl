@@ -1,6 +1,6 @@
-"""wheel_glide_reward: rewards forward WHEEL ROLLING (gravity-driven glide),
-capped at cap_speed, zero if the wheels roll backward, NaN-safe.
-Independent of any command (the slope task has a zero command).
+"""wheel_glide_reward : récompense le ROULEMENT des roues vers l'avant (glisse
+par gravité), plafonné à cap_speed, nul si les roues reculent, NaN-safe.
+Indépendant de toute commande (la tâche pente a une commande nulle).
 """
 
 import re
@@ -15,7 +15,7 @@ _WHEELS = {"passive_LF_wheel": 0, "passive_LR_wheel": 1, "passive_RF_wheel": 2, 
 
 class _Data:
     def __init__(self, omegas):
-        # 4 wheels, columns 0..3 in the order LF,LR,RF,RR
+        # 4 roues, colonnes 0..3 dans l'ordre LF,LR,RF,RR
         self.joint_vel = torch.tensor([omegas], dtype=torch.float32)
 
 
@@ -44,13 +44,13 @@ class _Env:
 
 
 def test_rewards_forward_roll_below_cap():
-    # omega=10 rad/s on all 4 -> speed = 10*0.0175 = 0.175 m/s (< cap 0.35)
+    # omega=10 rad/s sur les 4 -> vitesse = 10*0.0175 = 0.175 m/s (< cap 0.35)
     out = wheel_glide_reward(_Env([10.0, 10.0, 10.0, 10.0]), cap_speed=0.35)
     assert abs(float(out[0]) - 0.175) < 1e-6
 
 
 def test_caps_fast_roll():
-    # omega=40 -> 0.7 m/s -> capped at 0.35
+    # omega=40 -> 0.7 m/s -> plafonné à 0.35
     out = wheel_glide_reward(_Env([40.0, 40.0, 40.0, 40.0]), cap_speed=0.35)
     assert abs(float(out[0]) - 0.35) < 1e-6
 

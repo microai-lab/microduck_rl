@@ -32,7 +32,7 @@ class _FakeAsset:
         self.data = _FakeData(joint_pos, default_pos)
 
     def find_joints(self, query):
-        # mjlab returns (ids, names); we only handle the [name] query form
+        # mjlab renvoie (ids, names) ; on ne gère que la requête [name]
         (name,) = query
         return ([self._ids[name]], [name])
 
@@ -57,7 +57,7 @@ class _FakeEnv:
 
 NAMES = ["j0", "j1"]
 DOWN = {"j0": 1.0, "j1": -1.0}
-# HOME (STAND source) = 0 for both joints
+# HOME (STAND source) = 0 pour les deux joints
 HOME = torch.tensor([[0.0, 0.0]])
 
 
@@ -66,7 +66,7 @@ def _env(cur, phase):
 
 
 def test_phase_pose_track_perfect_at_down():
-    # phase 0.30 -> blend 1 -> target = DOWN; cur == DOWN -> gaussian 1, l1 0
+    # phase 0.30 -> blend 1 -> cible = DOWN ; cur == DOWN -> gaussienne 1, l1 0
     from mjlab.managers.scene_entity_config import SceneEntityCfg
     cfg = SceneEntityCfg("robot")
     env = _env([1.0, -1.0], phase=0.30)
@@ -78,7 +78,7 @@ def test_phase_pose_track_perfect_at_down():
 
 
 def test_phase_pose_track_l1_at_home_when_down_target():
-    # phase 0.30 -> target DOWN=[1,-1]; cur=HOME=[0,0] -> l1 = -mean(|1|,|1|) = -1
+    # phase 0.30 -> cible DOWN=[1,-1] ; cur=HOME=[0,0] -> l1 = -mean(|1|,|1|) = -1
     from mjlab.managers.scene_entity_config import SceneEntityCfg
     cfg = SceneEntityCfg("robot")
     env = _env([0.0, 0.0], phase=0.30)
@@ -87,7 +87,7 @@ def test_phase_pose_track_l1_at_home_when_down_target():
 
 
 def test_phase_pose_track_returns_to_stand():
-    # phase 0.80 -> blend 0 -> target = HOME; cur=HOME -> gaussian 1
+    # phase 0.80 -> blend 0 -> cible = HOME ; cur=HOME -> gaussienne 1
     from mjlab.managers.scene_entity_config import SceneEntityCfg
     cfg = SceneEntityCfg("robot")
     env = _env([0.0, 0.0], phase=0.80)
@@ -109,9 +109,9 @@ def test_phase_pose_track_affine_interpolation_nonzero_home():
 def test_ground_pick_cmd_cfg_has_randomize_phase_default_true():
     from mjlab_microduck.tasks.mdp import GroundPickPhaseCommandCfg
     from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
-    # build a minimal cfg by copying a default velocity cfg
-    # NOTE: adapted from `asset_name` (in the brief) -> `entity_name` (the local
-    # UniformVelocityCommandCfg API, which has no `asset_name` field).
+    # construit une cfg minimale en copiant une cfg velocity par défaut
+    # NOTE: adapté de `asset_name` (brief) -> `entity_name` (API locale de
+    # UniformVelocityCommandCfg, qui n'a pas de champ `asset_name`).
     base = UniformVelocityCommandCfg(
         entity_name="robot", resampling_time_range=(10.0, 10.0),
         ranges=UniformVelocityCommandCfg.Ranges(

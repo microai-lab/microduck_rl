@@ -1,11 +1,11 @@
-"""Microduck roller slope — balanced passive descent.
+"""Microduck roller slope — descente passive équilibrée.
 
-The robot spawns on the flat section (with a forward impulse), rolls onto a
-downhill ramp and lets itself glide while staying upright. No steering: the
-twist command is neutralized (rel_standing_envs=1.0). Custom flat+ramp terrain
-(FlatRampTerrainCfg), steepness curriculum (terrain_levels_slope). Unified 61D
-obs → hot-swappable at runtime (--new-cmd-obs) — inherited as-is from
-make_microduck_velocity_rollers_env_cfg (DR/obs/reset untouched here).
+Le robot spawne sur du plat (impulsion vers l'avant), roule sur une rampe
+descendante et se laisse glisser en restant debout. Aucun pilotage : la
+commande twist est neutralisée (rel_standing_envs=1.0). Terrain custom
+plat+rampe (FlatRampTerrainCfg), curriculum de raideur (terrain_levels_slope).
+Obs 61D unifié → interchangeable au runtime (--new-cmd-obs) — hérité tel quel
+de make_microduck_velocity_rollers_env_cfg (DR/obs/reset non touchés ici).
 """
 
 import math
@@ -26,24 +26,24 @@ from mjlab_microduck.tasks.microduck_velocity_rollers_env_cfg import (
 )
 from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg
 
-# Geometry of the flat + ramp + runout terrain.
+# Géométrie du terrain plat+rampe+sortie.
 FLAT_LENGTH        = 2.0
-RAMP_LENGTH_RANGE  = (3.0, 8.0)   # horizontal ramp length, drawn at random per tile
-RUNOUT_LENGTH      = 4.0          # flat runout at the bottom
-SPAWN_ON_RAMP      = 0.3          # spawn this many m onto the ramp (gravity -> rolling, no skidding)
-ENTRY_VELOCITY_X   = (0.25, 0.45) # small initial forward/downhill momentum (m/s)
-TILE_SIZE          = (15.0, 4.0)  # >= flat + ramp_max + runout (= 14) + margin
-SPAWN_YAW          = (0.0, 0.0)   # facing downhill (+x), fixed
+RAMP_LENGTH_RANGE  = (3.0, 8.0)   # longueur horizontale de la rampe, tirée au hasard par tuile
+RUNOUT_LENGTH      = 4.0          # plat de sortie en bas
+SPAWN_ON_RAMP      = 0.3          # spawn ce nb de m sur la rampe (gravité -> roulement, pas de patinage)
+ENTRY_VELOCITY_X   = (0.25, 0.45) # petit élan initial vers l'avant/descente (m/s)
+TILE_SIZE          = (15.0, 4.0)  # >= flat + ramp_max + runout (= 14) + marge
+SPAWN_YAW          = (0.0, 0.0)   # face à la descente (+x), fixe
 
-# Steepness at PLAY time: None = random (as during training). Set a value in
-# 0..1 to force a specific slope (1.0 = steepest ~20°, 0.5 = medium).
-# Overridable without editing the code through the SLOPE_PLAY_DIFFICULTY env var
-# (e.g. SLOPE_PLAY_DIFFICULTY=1.0 uv run play ... ; "none"/"random" = random).
+# Raideur au PLAY : None = aléatoire (comme à l'entraînement). Mettre une valeur
+# 0..1 pour forcer une pente précise (1.0 = la plus raide ~20°, 0.5 = moyenne).
+# Surchargeable sans éditer le code via la variable d'env SLOPE_PLAY_DIFFICULTY
+# (ex: SLOPE_PLAY_DIFFICULTY=1.0 uv run play ... ; "none"/"random" = aléatoire).
 PLAY_DIFFICULTY    = None
 
 
 def _resolve_play_difficulty():
-    """Play difficulty: env SLOPE_PLAY_DIFFICULTY, else the constant."""
+    """Difficulté de play : env SLOPE_PLAY_DIFFICULTY sinon la constante."""
     raw = os.environ.get("SLOPE_PLAY_DIFFICULTY")
     if raw is None:
         return PLAY_DIFFICULTY
@@ -53,12 +53,12 @@ def _resolve_play_difficulty():
     try:
         return max(0.0, min(1.0, float(raw)))
     except ValueError:
-        print(f"[roller_slope] SLOPE_PLAY_DIFFICULTY='{raw}' invalid -> default {PLAY_DIFFICULTY}")
+        print(f"[roller_slope] SLOPE_PLAY_DIFFICULTY='{raw}' invalide -> défaut {PLAY_DIFFICULTY}")
         return PLAY_DIFFICULTY
 
-# "Fell into the void" termination: below the lowest runout (steepest and
-# longest ramp), with margin => never fires during a normal descent, only if the
-# robot leaves the solid.
+# Terminaison « tombé dans le vide » : sous le plat de sortie le plus bas
+# (rampe la plus raide et la plus longue), avec marge => ne se déclenche jamais
+# pendant une descente normale, seulement si le robot quitte le solide.
 _MAX_DROP  = RAMP_LENGTH_RANGE[1] * math.tan(math.radians(RAMP_DEG_MAX))
 VOID_FLOOR = -_MAX_DROP - 0.5
 
@@ -66,13 +66,13 @@ VOID_FLOOR = -_MAX_DROP - 0.5
 def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg = make_microduck_velocity_rollers_env_cfg(play=play)
 
-    # === TERRAIN: flat + ramp (random length) + flat runout ===
+    # === TERRAIN : plat + rampe (longueur aléatoire) + plat de sortie ===
     cfg.scene.terrain = TerrainEntityCfg(
         terrain_type="generator",
         terrain_generator=TerrainGeneratorCfg(
             size=TILE_SIZE,
             curriculum=True,
-            num_rows=10,          # 10 steepness levels
+            num_rows=10,          # 10 niveaux de raideur
             num_cols=1,
             difficulty_range=(0.0, 1.0),
             sub_terrains={
@@ -84,12 +84,12 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
                 )
             },
         ),
-        max_init_terrain_level=0,  # curriculum: start on the gentlest ramp
+        max_init_terrain_level=0,  # curriculum : démarrer sur la rampe la plus douce
     )
 
-    # At play time: show a variety of slopes. difficulty None -> random
-    # steepness (level drawn across all rows); a value in 0..1 forces a specific
-    # steepness (1.0 = the steepest). Controlled via SLOPE_PLAY_DIFFICULTY.
+    # Au play : montrer des pentes variées. difficulté None -> raideurs aléatoires
+    # (niveau tiré sur toutes les rangées) ; une valeur 0..1 force une raideur
+    # précise (1.0 = la plus raide). Pilotable via SLOPE_PLAY_DIFFICULTY.
     if play:
         play_difficulty = _resolve_play_difficulty()
         if play_difficulty is not None:
@@ -97,7 +97,7 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
         else:
             cfg.scene.terrain.max_init_terrain_level = None
 
-    # === Neutralized COMMAND (pure balance) ===
+    # === COMMANDE neutralisée (équilibre pur) ===
     command = cfg.commands["twist"]
     command.rel_standing_envs = 1.0
     command.rel_heading_envs = 0.0
@@ -106,24 +106,24 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
     if getattr(command.ranges, "ang_vel_z", None) is not None:
         command.ranges.ang_vel_z = (0.0, 0.0)
 
-    # === RESET: always facing downhill (+x), NO base push ===
-    # The inherited yaw is random (-180°/+180°) -> we fix it at 0 (facing the
-    # bottom of the slope). No base velocity injected: the robot spawns on the
-    # ramp (see spawn_on_ramp) and gravity spins the wheels (momentum in the
-    # wheels, no slip). The old base push (fast base, stationary wheels) skidded
-    # -> contact spike -> NaN divergence, and the robot "walked to a stop"
-    # instead of rolling.
+    # === RESET : toujours face à la descente (+x), PAS de poussée de base ===
+    # Le yaw hérité est aléatoire (-180°/+180°) -> on le fixe à 0 (face au bas de
+    # la pente). Aucune vitesse de base injectée : le robot spawne sur la rampe
+    # (voir spawn_on_ramp), la gravité fait rouler les roues (élan aux roues,
+    # sans glissement). L'ancienne poussée de base (base rapide, roues immobiles)
+    # patinait -> pic de contact -> divergence NaN, et le robot "marchait pour
+    # s'arrêter" au lieu de rouler.
     cfg.events["reset_base"].params["pose_range"]["yaw"] = SPAWN_YAW
-    # NO base push here (moving base + stationary wheels = skidding jolt on the
-    # first step). The initial momentum is given as consistent ROLLING (base +
-    # wheels, ω·r = v) by reset_rolling_entry below -> clean start.
+    # PAS de poussée de base ici (base qui bouge + roues immobiles = à-coup de
+    # patinage au 1er pas). L'élan initial est donné en ROULEMENT cohérent
+    # (base + roues, ω·r = v) par reset_rolling_entry ci-dessous -> départ propre.
     cfg.events["reset_base"].params["velocity_range"] = {}
 
-    # === REWARDS: FREE balance (it places its own center of gravity) ===
-    # NO fixed pose reward: we no longer dictate the flat-ground standing posture
-    # (which prevented it from flexing/leaning). It is free to move its CoM
-    # (hips/knees, lean) to hold the slope. We only reward: staying upright,
-    # being alive, gliding, going straight — and not falling (terminations).
+    # === RÉCOMPENSES : équilibre LIBRE (il place son centre de gravité lui-même) ===
+    # PAS de récompense de pose fixe : on ne lui dicte plus la posture debout du
+    # plat (qui l'empêchait de fléchir/pencher). Il est libre de bouger son CoM
+    # (hanches/genoux, inclinaison) pour tenir la pente. On récompense juste :
+    # rester debout, vivre, glisser, aller droit — et ne pas tomber (terminaisons).
     keep = {"action_rate_l2"}
     for name in list(cfg.rewards.keys()):
         if name not in keep:
@@ -135,17 +135,17 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
         params={"asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",)), "std": 0.2},
     )
     cfg.rewards["alive"] = RewardTermCfg(func=microduck_mdp.is_alive, weight=1.0)
-    # LET IT GLIDE (roll), do NOT accelerate/run: rewards downhill WHEEL ROLLING,
-    # capped at cap_speed. Capped => no incentive to push faster; wheel-based =>
-    # "running" (pushing the base without rolling) pays nothing. Without a glide
-    # reward the optimum would be to stand still; with it, the robot lets itself
-    # roll as long as it can hold its balance.
+    # Se LAISSER GLISSER (rouler), PAS accélérer/courir : récompense le ROULEMENT
+    # des roues vers le bas, plafonné à cap_speed. Plafonné => pas d'incitation à
+    # pousser plus vite ; basé sur les roues => "courir" (pousser la base sans
+    # rouler) ne rapporte pas. Sans récompense de glisse, l'optimum serait de
+    # rester immobile ; avec, il se laisse rouler tant qu'il tient l'équilibre.
     cfg.rewards["wheel_glide"] = RewardTermCfg(
         func=microduck_mdp.wheel_glide_reward, weight=2.0, params={"cap_speed": 0.35},
     )
-    # GO STRAIGHT: hold the spawn yaw (= 0 = facing downhill). Being corrective
-    # (the robot can recover), this is the right way to go straight. NB: the PPO
-    # symmetry (SYMMETRY_CFG) is coded for the old 51D obs -> unusable here.
+    # ALLER DROIT : maintenir le yaw de spawn (= 0 = face à la descente). Corrigeant
+    # (le robot peut se rattraper), c'est la bonne façon d'aller tout droit. NB: la
+    # symétrie PPO (SYMMETRY_CFG) est codée pour l'ancien obs 51D -> inutilisable ici.
     cfg.rewards["heading_hold"] = RewardTermCfg(
         func=microduck_mdp.heading_hold_reward, weight=1.5, params={"std": 0.4},
     )
@@ -160,10 +160,10 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
     cfg.rewards["neck_action_rate_l2"] = RewardTermCfg(
         func=microduck_mdp.neck_action_rate_l2, weight=-0.5,
     )
-    # KEEP THE HEAD UPRIGHT: penalizes neck/head joint deviation from the home
-    # position. We removed the fixed LEG pose (for free balance), but nothing was
-    # holding the head -> it drifted anywhere. This constrains the head/neck
-    # ONLY, not the legs.
+    # GARDER LA TÊTE DROITE : pénalise la déviation des joints cou/tête par rapport
+    # à la position home. On a retiré la pose fixe des JAMBES (pour l'équilibre
+    # libre), mais rien ne tenait la tête -> elle partait n'importe où. Ceci ne
+    # contraint QUE la tête/cou, pas les jambes.
     cfg.rewards["neck_joint_pos_l2"] = RewardTermCfg(
         func=microduck_mdp.neck_joint_pos_l2, weight=-0.75,
     )
@@ -172,11 +172,11 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
     )
     cfg.rewards["action_rate_l2"].weight = -1.0
 
-    # === TERMINATIONS: fall + fell into the void ===
-    # The runout provides solid ground at the bottom of the ramp, so terminating
-    # "at the edge" is no longer needed (terrain_edge_reached cut long ramps off
-    # too early). We keep: fall (bad_orientation), NaN, and "fell into the void"
-    # (trunk below the lowest runout) in case the robot leaves the solid.
+    # === TERMINATIONS : chute + tombé dans le vide ===
+    # Le plat de sortie donne du solide au bas de la rampe, donc plus besoin de
+    # terminer « au bord » (terrain_edge_reached coupait trop tôt les rampes
+    # longues). On garde : chute (bad_orientation), NaN, et « tombé dans le vide »
+    # (trunk sous le plat de sortie le plus bas) au cas où le robot quitte le solide.
     cfg.terminations["fell_over"] = TerminationTermCfg(
         func=base_mdp.bad_orientation,
         params={"limit_angle": 1.0, "asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",))},
@@ -191,13 +191,12 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
         func=microduck_mdp.robot_state_is_nan, time_out=False,
     )
 
-    # === OBS: sanitize NaN/Inf (robustness to rare contact divergences) ===
-    # A rare contact (~1 in 25M env-steps) makes the free joint diverge to NaN.
-    # Because of a one-substep offset, the nan_state termination only catches it
-    # on the NEXT STEP (reset), but the NaN already reaches the current step's obs
-    # -> rsl_rl's check_nan kills training. nan_policy="sanitize" replaces NaN/Inf
-    # with 0 in the returned obs (no crash); nan_state then resets the offending
-    # env.
+    # === OBS : assainir les NaN/Inf (robustesse aux divergences de contact rares) ===
+    # Un contact rare (~1/25M pas-env) fait diverger le free-joint en NaN. À cause
+    # du décalage d'un sous-pas, la terminaison nan_state ne l'attrape qu'AU PAS
+    # SUIVANT (reset), mais le NaN atteint déjà l'obs du pas courant -> check_nan de
+    # rsl_rl tue l'entraînement. nan_policy="sanitize" remplace NaN/Inf par 0 dans
+    # l'obs renvoyée (pas de crash) ; nan_state reset ensuite l'env fautif.
     for grp in ("actor", "critic"):
         cfg.observations[grp].nan_policy = "sanitize"
 
@@ -205,18 +204,18 @@ def make_microduck_roller_slope_env_cfg(play: bool = False) -> ManagerBasedRlEnv
     cfg.events["reset_action_history"] = EventTermCfg(
         func=microduck_mdp.reset_action_history, mode="reset",
     )
-    # Rolling start (momentum in the wheels, no skidding). AFTER reset_base.
+    # Départ en roulement (élan aux roues, sans patinage). APRÈS reset_base.
     cfg.events["reset_rolling_entry"] = EventTermCfg(
         func=microduck_mdp.reset_rolling_entry, mode="reset",
         params={"speed_range": ENTRY_VELOCITY_X},
     )
 
-    # === CURRICULUM: steepness gentle -> steep ===
-    # Starts on the gentlest slope (2°) and promotes to steeper ones (up to 20°)
-    # once the robot has descended far enough (terrain_levels_slope, based on the
-    # distance travelled). Viable now that descent_speed makes it MOVE (before it
-    # stood still -> never promoted). It learns balance progressively instead of
-    # being thrown straight onto 20° (where it nose-dives).
+    # === CURRICULUM : raideur doux -> raide ===
+    # Démarre sur la pente la plus douce (2°) et promeut vers plus raide (jusqu'à
+    # 20°) quand le robot a descendu assez loin (terrain_levels_slope, basé sur la
+    # distance parcourue). Viable maintenant que descent_speed le fait AVANCER
+    # (avant il restait immobile -> jamais promu). Il apprend l'équilibre
+    # progressivement au lieu d'être jeté d'emblée sur du 20° (où il pique du nez).
     for name in list(cfg.curriculum.keys()):
         del cfg.curriculum[name]
     cfg.curriculum["terrain_levels"] = CurriculumTermCfg(func=microduck_mdp.terrain_levels_slope)

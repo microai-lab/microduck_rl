@@ -2,49 +2,49 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a "crouch while gliding, then stand back up" gesture triggered by button A, without modifying the Rust runtime, by training an mjlab policy loaded into the `--ground-pick` slot.
+**Goal:** Ajouter un geste « s'accroupir en glissant puis se relever » déclenché au bouton A, sans modifier le runtime Rust, en entraînant une policy mjlab chargée dans le slot `--ground-pick`.
 
-**Architecture:** A new mjlab task trained on the roller robot, driven by the `GroundPickPhaseCommand` phase command (the one the runtime's ground-pick slot sends). A new reward tracks a trapezoidal trunk-height target (high → low → 1 s plateau → high) along the phase. The same 61D obs layout as the roller policy → hot-swappable at runtime. ONNX export, loaded via `--ground-pick`.
+**Architecture:** Nouvelle tâche mjlab entraînée sur le robot rollers, pilotée par la commande de phase `GroundPickPhaseCommand` (celle qu'envoie le slot ground-pick du runtime). Une nouvelle reward suit une cible de hauteur du tronc « en trapèze » (haut → bas → palier 1 s → haut) le long de la phase. Le même layout d'obs 61D que la policy roller → interchangeable au runtime. Export ONNX, chargé via `--ground-pick`.
 
-**Tech Stack:** Python, PyTorch, mjlab 1.3.0, MuJoCo, uv, ONNX. Target runtime: `apirrone/microduck_runtime` (Rust, a binary — NOT modified).
+**Tech Stack:** Python, PyTorch, mjlab 1.3.0, MuJoCo, uv, ONNX. Runtime cible : `apirrone/microduck_runtime` (Rust, binaire — NON modifié).
 
 ## Global Constraints
 
-- **No modification of the Rust runtime.** The gesture reuses the existing `--ground-pick` slot (button A, one-shot).
-- **The unified 61D obs layout** is mandatory (`--new-cmd-obs`): `[twist(3), head(4), body(6)]`, head/body zero-padded. Every new policy MUST preserve this layout.
-- **14 active joints** (passive wheels excluded via `SceneEntityCfg("robot", joint_names=(r"^(?!passive_).*",))`), `action.scale = 1.0`, `kp_fw = 200`.
-- **Training/deployment parity (sim2real):** at deployment, force `--ground-pick-kp-ratio 1.0` (default 0.6), `--ground-pick-action-scale` = the runtime action_scale, `--ground-pick-period 5.0`.
-- **Phase encoding (imposed by the runtime):** `command = [cos(2π·φ), sin(2π·φ), 0]`, 4 s period. Glide plateau = 1 s → `hold_lo=0.375`, `hold_hi=0.625`.
-- **Simple commits** (no `Co-Authored-By`).
-- Run the tests via `uv run --with pytest pytest` (no pytest dependency added to the project).
-- Reference spec: `docs/superpowers/specs/2026-07-17-roller-crouch-glide-design.md`.
+- **Aucune modification du runtime Rust.** Le geste réutilise le slot `--ground-pick` existant (bouton A, one-shot).
+- **Layout d'obs unifié 61D** obligatoire (`--new-cmd-obs`) : `[twist(3), head(4), body(6)]`, head/body zero-paddés. Toute nouvelle policy DOIT conserver ce layout.
+- **14 joints actifs** (roues passives exclues via `SceneEntityCfg("robot", joint_names=(r"^(?!passive_).*",))`), `action.scale = 1.0`, `kp_fw = 200`.
+- **Parité entraînement/déploiement (sim2real) :** au déploiement, forcer `--ground-pick-kp-ratio 1.0` (défaut 0.6), `--ground-pick-action-scale` = action_scale runtime, `--ground-pick-period 5.0`.
+- **Phase encoding (imposé par le runtime) :** `command = [cos(2π·φ), sin(2π·φ), 0]`, période 4 s. Palier de glisse = 1 s → `hold_lo=0.375`, `hold_hi=0.625`.
+- **Commits simples** (pas de `Co-Authored-By`).
+- Lancer les tests via `uv run --with pytest pytest` (pas de dépendance pytest ajoutée au projet).
+- Spec de référence : `docs/superpowers/specs/2026-07-17-roller-crouch-glide-design.md`.
 
 ---
 
 ## File Structure
 
-| File | Responsibility |
+| Fichier | Responsabilité |
 |---|---|
-| `src/mjlab_microduck/tasks/mdp.py` | **Modify.** Add 3 functions: `crouch_height_target` (pure), `crouch_glide_reward_from_values` (pure), `crouch_glide_height_by_phase` (env wrapper), plus `forward_speed_reward`. |
-| `tests/test_crouch_glide.py` | **Create.** Unit tests of the pure functions. |
-| `src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py` | **Create.** The env (roller + phase hybrid) + `MicroduckRollerCrouchRlCfg`. |
-| `src/mjlab_microduck/tasks/__init__.py` | **Modify.** Import + register `Mjlab-RollerCrouch-Flat-MicroDuck`. |
-| `tests/test_roller_crouch_cfg.py` | **Create.** Smoke test: the env builds with the right command/rewards. |
+| `src/mjlab_microduck/tasks/mdp.py` | **Modifier.** Ajouter 3 fonctions : `crouch_height_target` (pure), `crouch_glide_reward_from_values` (pure), `crouch_glide_height_by_phase` (wrapper env) et `forward_speed_reward`. |
+| `tests/test_crouch_glide.py` | **Créer.** Tests unitaires des fonctions pures. |
+| `src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py` | **Créer.** L'env (hybride roller + phase) + `MicroduckRollerCrouchRlCfg`. |
+| `src/mjlab_microduck/tasks/__init__.py` | **Modifier.** Importer + enregistrer `Mjlab-RollerCrouch-Flat-MicroDuck`. |
+| `tests/test_roller_crouch_cfg.py` | **Créer.** Smoke test : l'env se construit avec la bonne commande/rewards. |
 
 ---
 
-## Task 1: Trapezoidal height target (pure function)
+## Task 1: Cible de hauteur « en trapèze » (fonction pure)
 
 **Files:**
-- Modify: `src/mjlab_microduck/tasks/mdp.py` (add the function, after `com_height_target` around line 737)
+- Modify: `src/mjlab_microduck/tasks/mdp.py` (ajouter la fonction, après `com_height_target` vers la ligne 737)
 - Test: `tests/test_crouch_glide.py`
 
 **Interfaces:**
-- Produces: `crouch_height_target(phase: torch.Tensor, height_low: float, height_high: float, hold_lo: float = 0.375, hold_hi: float = 0.625) -> torch.Tensor` — takes the phase (B,) ∈ [0,1) and returns the target height (B,).
+- Produces: `crouch_height_target(phase: torch.Tensor, height_low: float, height_high: float, hold_lo: float = 0.375, hold_hi: float = 0.625) -> torch.Tensor` — prend la phase (B,) ∈ [0,1) et retourne la hauteur-cible (B,).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Écrire le test qui échoue**
 
-Create `tests/test_crouch_glide.py`:
+Créer `tests/test_crouch_glide.py` :
 
 ```python
 import math
@@ -53,41 +53,41 @@ from mjlab_microduck.tasks import mdp
 
 
 def test_crouch_height_target_endpoints_are_high():
-    # phase 0 (start) and phase ~1 (end) → high stance (standing)
+    # phase 0 (début) et phase ~1 (fin) → hauteur haute (debout)
     phase = torch.tensor([0.0, 0.999])
     t = mdp.crouch_height_target(phase, height_low=0.075, height_high=0.11)
     assert torch.allclose(t, torch.tensor([0.11, 0.11]), atol=2e-3)
 
 
 def test_crouch_height_target_plateau_is_low():
-    # the whole plateau [0.375, 0.625] → constant low height
+    # tout le palier [0.375, 0.625] → hauteur basse constante
     phase = torch.tensor([0.375, 0.5, 0.624])
     t = mdp.crouch_height_target(phase, height_low=0.075, height_high=0.11)
     assert torch.allclose(t, torch.full((3,), 0.075), atol=1e-6)
 
 
 def test_crouch_height_target_descent_midpoint():
-    # midway through the descent (phase = hold_lo/2 = 0.1875) → midpoint of the two heights
+    # milieu de la descente (phase = hold_lo/2 = 0.1875) → milieu des deux hauteurs
     phase = torch.tensor([0.1875])
     t = mdp.crouch_height_target(phase, height_low=0.075, height_high=0.11)
     assert torch.allclose(t, torch.tensor([(0.11 + 0.075) / 2]), atol=1e-6)
 
 
 def test_crouch_height_target_rise_midpoint():
-    # midway through the rise (phase = 0.8125) → midpoint of the two heights
+    # milieu de la remontée (phase = 0.8125) → milieu des deux hauteurs
     phase = torch.tensor([0.8125])
     t = mdp.crouch_height_target(phase, height_low=0.075, height_high=0.11)
     assert torch.allclose(t, torch.tensor([(0.11 + 0.075) / 2]), atol=1e-6)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
 Run: `uv run --with pytest pytest tests/test_crouch_glide.py -v`
 Expected: FAIL — `AttributeError: module ... has no attribute 'crouch_height_target'`
 
-- [ ] **Step 3: Implement the function**
+- [ ] **Step 3: Implémenter la fonction**
 
-In `src/mjlab_microduck/tasks/mdp.py`, just after `com_height_target` (after line 737):
+Dans `src/mjlab_microduck/tasks/mdp.py`, juste après `com_height_target` (après la ligne 737) :
 
 ```python
 def crouch_height_target(
@@ -97,19 +97,19 @@ def crouch_height_target(
     hold_lo: float = 0.375,
     hold_hi: float = 0.625,
 ) -> torch.Tensor:
-    """Trapezoidal trunk-height target along the phase [0,1).
+    """Cible de hauteur du tronc « en trapèze » le long de la phase [0,1).
 
-    phase ∈ [0, hold_lo)      : descent   height_high -> height_low
-    phase ∈ [hold_lo, hold_hi): plateau    height_low   (the crouched glide)
-    phase ∈ [hold_hi, 1.0)    : rise       height_low  -> height_high
+    phase ∈ [0, hold_lo)      : descente   height_high -> height_low
+    phase ∈ [hold_lo, hold_hi): palier      height_low   (la glisse accroupie)
+    phase ∈ [hold_hi, 1.0)    : remontée    height_low  -> height_high
 
     Args:
-        phase: (B,) per-env phase, in [0, 1).
-        height_low: crouched trunk height (m).
-        height_high: standing trunk height (m).
-        hold_lo, hold_hi: bounds of the low plateau, as a fraction of phase.
+        phase: (B,) phase par env, dans [0, 1).
+        height_low: hauteur du tronc accroupi (m).
+        height_high: hauteur du tronc debout (m).
+        hold_lo, hold_hi: bornes du palier bas en fraction de phase.
     Returns:
-        (B,) target height in meters.
+        (B,) hauteur-cible en mètres.
     """
     descend = phase < hold_lo
     hold = (phase >= hold_lo) & (phase < hold_hi)
@@ -125,7 +125,7 @@ def crouch_height_target(
     return torch.where(descend, t_descend, torch.where(hold, t_hold, t_rise))
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 4: Lancer le test pour vérifier qu'il passe**
 
 Run: `uv run --with pytest pytest tests/test_crouch_glide.py -v`
 Expected: PASS (4 tests)
@@ -134,31 +134,31 @@ Expected: PASS (4 tests)
 
 ```bash
 git add src/mjlab_microduck/tasks/mdp.py tests/test_crouch_glide.py
-git commit -m "roller-crouch: trapezoidal height target (pure function + tests)"
+git commit -m "roller-crouch: cible de hauteur en trapezoide (fonction pure + tests)"
 ```
 
 ---
 
-## Task 2: The crouch-glide and forward-speed rewards
+## Task 2: Rewards crouch-glide et forward-speed
 
 **Files:**
 - Modify: `src/mjlab_microduck/tasks/mdp.py`
-- Test: `tests/test_crouch_glide.py` (additions)
+- Test: `tests/test_crouch_glide.py` (ajouts)
 
 **Interfaces:**
 - Consumes: `crouch_height_target` (Task 1).
 - Produces:
   - `crouch_glide_reward_from_values(com_height, cmd_cos, cmd_sin, height_low, height_high, hold_lo=0.375, hold_hi=0.625, std=0.02) -> torch.Tensor` (pure).
-  - `crouch_glide_height_by_phase(env, command_name="twist", height_low=0.075, height_high=0.11, hold_lo=0.375, hold_hi=0.625, std=0.02, asset_cfg=_DEFAULT_ASSET_CFG) -> torch.Tensor` (env wrapper).
-  - `forward_speed_reward(env, vel_ref=0.2, asset_cfg=_DEFAULT_ASSET_CFG) -> torch.Tensor` — rewards forward speed (momentum), independent of the command.
+  - `crouch_glide_height_by_phase(env, command_name="twist", height_low=0.075, height_high=0.11, hold_lo=0.375, hold_hi=0.625, std=0.02, asset_cfg=_DEFAULT_ASSET_CFG) -> torch.Tensor` (wrapper env).
+  - `forward_speed_reward(env, vel_ref=0.2, asset_cfg=_DEFAULT_ASSET_CFG) -> torch.Tensor` — récompense la vitesse avant (élan), indépendante de la commande.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Écrire les tests qui échouent**
 
-Add to `tests/test_crouch_glide.py`:
+Ajouter à `tests/test_crouch_glide.py` :
 
 ```python
 def test_reward_is_one_when_height_matches_target():
-    # phase 0.5 (full plateau) → target = height_low; if com_height == height_low → reward 1
+    # phase 0.5 (plein palier) → cible = height_low ; si com_height == height_low → reward 1
     cmd_cos = torch.tensor([math.cos(2 * math.pi * 0.5)])  # -1
     cmd_sin = torch.tensor([math.sin(2 * math.pi * 0.5)])  # ~0
     com_height = torch.tensor([0.075])
@@ -169,7 +169,7 @@ def test_reward_is_one_when_height_matches_target():
 
 
 def test_reward_decays_when_off_by_one_std():
-    # at height_low + std from the target → exp(-1) ≈ 0.368
+    # à height_low + std de la cible → exp(-1) ≈ 0.368
     cmd_cos = torch.tensor([math.cos(2 * math.pi * 0.5)])
     cmd_sin = torch.tensor([math.sin(2 * math.pi * 0.5)])
     com_height = torch.tensor([0.075 + 0.02])
@@ -180,25 +180,25 @@ def test_reward_decays_when_off_by_one_std():
 
 
 def test_reward_at_phase_zero_expects_high_stance():
-    # phase 0 → target = height_high; staying upright is rewarded, crouching is not
+    # phase 0 → cible = height_high ; rester debout est récompensé, être accroupi non
     cmd_cos = torch.tensor([1.0, 1.0])   # cos(0)
     cmd_sin = torch.tensor([0.0, 0.0])   # sin(0)
-    com_height = torch.tensor([0.11, 0.075])  # standing vs crouched
+    com_height = torch.tensor([0.11, 0.075])  # debout vs accroupi
     r = mdp.crouch_glide_reward_from_values(
         com_height, cmd_cos, cmd_sin, height_low=0.075, height_high=0.11, std=0.02
     )
-    assert r[0] > 0.99          # standing at phase 0 → ~1
-    assert r[1] < 0.2           # crouched at phase 0 → low
+    assert r[0] > 0.99          # debout à phase 0 → ~1
+    assert r[1] < 0.2           # accroupi à phase 0 → faible
 ```
 
-- [ ] **Step 2: Verify it fails**
+- [ ] **Step 2: Vérifier l'échec**
 
 Run: `uv run --with pytest pytest tests/test_crouch_glide.py -v`
-Expected: FAIL — `crouch_glide_reward_from_values` does not exist.
+Expected: FAIL — `crouch_glide_reward_from_values` n'existe pas.
 
-- [ ] **Step 3: Implement the three functions**
+- [ ] **Step 3: Implémenter les trois fonctions**
 
-In `src/mjlab_microduck/tasks/mdp.py`, following `crouch_height_target`:
+Dans `src/mjlab_microduck/tasks/mdp.py`, à la suite de `crouch_height_target` :
 
 ```python
 def crouch_glide_reward_from_values(
@@ -211,10 +211,10 @@ def crouch_glide_reward_from_values(
     hold_hi: float = 0.625,
     std: float = 0.02,
 ) -> torch.Tensor:
-    """Gaussian reward for tracking the height target (pure function).
+    """Récompense gaussienne du suivi de la cible de hauteur (fonction pure).
 
-    Decodes the phase from [cos, sin], then compares the measured height to the
-    trapezoidal target. Returns exp(-((h - target)/std)^2) ∈ (0, 1].
+    Décode la phase depuis [cos, sin] puis compare la hauteur mesurée à la
+    cible-trapèze. Retourne exp(-((h - cible)/std)^2) ∈ (0, 1].
     """
     phase = (torch.atan2(cmd_sin, cmd_cos) / (2 * torch.pi)) % 1.0
     target = crouch_height_target(phase, height_low, height_high, hold_lo, hold_hi)
@@ -231,10 +231,10 @@ def crouch_glide_height_by_phase(
     std: float = 0.02,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Main reward: tracks the trunk-height target along the phase.
+    """Reward principale : suit la cible de hauteur du tronc le long de la phase.
 
-    The CoM height is computed as in `com_height_target` (world z minus the
-    terrain origin, nan->0). The phase comes from the GroundPick command.
+    La hauteur du CoM est calculée comme dans `com_height_target` (world z moins
+    l'origine du terrain, nan->0). La phase provient de la commande GroundPick.
     """
     asset: Entity = env.scene[asset_cfg.name]
     com_height = torch.nan_to_num(
@@ -252,31 +252,31 @@ def forward_speed_reward(
     vel_ref: float = 0.2,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Reward the trunk's forward speed (keep the momentum / do not brake).
+    """Récompense la vitesse avant du tronc (conserver l'élan / ne pas freiner).
 
-    Independent of the command (the command carries the phase, not the speed).
-    tanh(clamp(vx, 0)/vel_ref) → saturates at ~1, never rewards going backward.
+    Indépendante de la commande (la commande porte la phase, pas la vitesse).
+    tanh(clamp(vx, 0)/vel_ref) → sature à ~1, ne récompense jamais reculer.
     """
     asset: Entity = env.scene[asset_cfg.name]
     vx = asset.data.root_link_lin_vel_b[:, 0]
     return torch.tanh(torch.clamp(vx, min=0.0) / vel_ref)
 ```
 
-- [ ] **Step 4: Verify it passes**
+- [ ] **Step 4: Vérifier le passage**
 
 Run: `uv run --with pytest pytest tests/test_crouch_glide.py -v`
-Expected: PASS (7 tests in total)
+Expected: PASS (7 tests au total)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/mjlab_microduck/tasks/mdp.py tests/test_crouch_glide.py
-git commit -m "roller-crouch: crouch-glide-height and forward-speed rewards"
+git commit -m "roller-crouch: rewards crouch-glide-height et forward-speed"
 ```
 
 ---
 
-## Task 3: The environment + task registration
+## Task 3: L'environnement + enregistrement de la tâche
 
 **Files:**
 - Create: `src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py`
@@ -284,12 +284,12 @@ git commit -m "roller-crouch: crouch-glide-height and forward-speed rewards"
 - Test: `tests/test_roller_crouch_cfg.py`
 
 **Interfaces:**
-- Consumes: `crouch_glide_height_by_phase`, `forward_speed_reward`, `ground_pick_return_pose` (Task 2 + existing), `GroundPickPhaseCommandCfg`, `GroundPickPhaseCommand`, `MICRODUCK_WALK_ROLLERS_ROBOT_CFG`.
-- Produces: `make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg`, `MicroduckRollerCrouchRlCfg`, and the `Mjlab-RollerCrouch-Flat-MicroDuck` task.
+- Consumes: `crouch_glide_height_by_phase`, `forward_speed_reward`, `ground_pick_return_pose` (Task 2 + existant), `GroundPickPhaseCommandCfg`, `GroundPickPhaseCommand`, `MICRODUCK_WALK_ROLLERS_ROBOT_CFG`.
+- Produces: `make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg`, `MicroduckRollerCrouchRlCfg`, tâche `Mjlab-RollerCrouch-Flat-MicroDuck`.
 
-- [ ] **Step 1: Write the failing smoke test**
+- [ ] **Step 1: Écrire le smoke test qui échoue**
 
-Create `tests/test_roller_crouch_cfg.py`:
+Créer `tests/test_roller_crouch_cfg.py` :
 
 ```python
 from mjlab_microduck.tasks.microduck_roller_crouch_env_cfg import (
@@ -310,7 +310,7 @@ def test_cfg_has_crouch_and_forward_rewards():
     cfg = make_microduck_roller_crouch_env_cfg()
     assert "crouch_glide_height" in cfg.rewards
     assert "forward_speed" in cfg.rewards
-    # active skating rewards removed (no stride during the trick)
+    # rewards de patinage actif retirées (pas de stride pendant le trick)
     for gone in ("braking", "skating_air_time", "single_support", "glide", "wheel_speed"):
         assert gone not in cfg.rewards
 
@@ -320,29 +320,29 @@ def test_cfg_has_entry_velocity_event():
     assert "entry_velocity" in cfg.events
 ```
 
-- [ ] **Step 2: Verify it fails**
+- [ ] **Step 2: Vérifier l'échec**
 
 Run: `uv run --with pytest pytest tests/test_roller_crouch_cfg.py -v`
 Expected: FAIL — `ModuleNotFoundError: ...microduck_roller_crouch_env_cfg`
 
-- [ ] **Step 3: Create the environment file**
+- [ ] **Step 3: Créer le fichier d'environnement**
 
-Create `src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py`:
+Créer `src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py` :
 
 ```python
 """Microduck roller crouch-glide task.
 
-One-shot gesture triggered by button A through the runtime's --ground-pick
-slot: the robot crouches and glides on its momentum (~1 s plateau), then stands
-back up and hands control back to the roller policy.
+Geste one-shot déclenché au bouton A via le slot --ground-pick du runtime :
+le robot s'accroupit et glisse sur son élan (palier ~1 s), puis se relève et
+rend la main à la policy roller.
 
-Hybrid:
-  - roller physics / robot     ← microduck_velocity_rollers_env_cfg.py
-  - one-shot phase machinery   ← microduck_ground_pick_env_cfg.py
-    (GroundPickPhaseCommand: [cos(2πφ), sin(2πφ), 0], period 4 s)
+Hybride :
+  - physique / robot roller  ← microduck_velocity_rollers_env_cfg.py
+  - machinerie phase one-shot ← microduck_ground_pick_env_cfg.py
+    (commande GroundPickPhaseCommand : [cos(2πφ), sin(2πφ), 0], période 4 s)
 
-Trapezoidal height target (high→low→1 s plateau→high) via
-crouch_glide_height_by_phase. Unified 61D obs → hot-swappable at runtime.
+Cible de hauteur « en trapèze » (haut→bas→palier 1 s→haut) via
+crouch_glide_height_by_phase. Obs 61D unifié → interchangeable au runtime.
 """
 
 import math
@@ -350,7 +350,7 @@ from copy import deepcopy
 
 ENABLE_SYMMETRY = False
 
-# DR — taken from the roller env
+# DR — repris du roller env
 ENABLE_COM_RANDOMIZATION             = True
 ENABLE_HEAD_COM_RANDOMIZATION        = True
 ENABLE_MASS_INERTIA_RANDOMIZATION    = True
@@ -371,11 +371,11 @@ VELOCITY_PUSH_RANGE              = (-0.2, 0.2)
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0
 ENCODER_BIAS_RANGE               = (-0.015, 0.015)
 
-# Gesture: target heights (m) and entry velocity (momentum)
-CROUCH_HEIGHT_HIGH = 0.11    # standing trunk
-CROUCH_HEIGHT_LOW  = 0.075   # crouched trunk (to be refined at play time)
+# Geste : hauteurs cibles (m) et vitesse d'entrée (élan)
+CROUCH_HEIGHT_HIGH = 0.11    # tronc debout
+CROUCH_HEIGHT_LOW  = 0.075   # tronc accroupi (à affiner en play)
 CROUCH_STD         = 0.02
-ENTRY_VELOCITY_X   = (0.2, 0.5)  # m/s: the robot arrives already rolling
+ENTRY_VELOCITY_X   = (0.2, 0.5)  # m/s : le robot arrive en roulant
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import dr
@@ -402,7 +402,7 @@ from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg, SYMMETRY_CFG
 
 
 def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Crouch-glide-on-rollers env, driven by the ground-pick slot's phase."""
+    """Env crouch-glide sur rollers, piloté par la phase du slot ground-pick."""
 
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
@@ -448,7 +448,7 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
     cfg.rewards["angular_momentum"].weight = -0.02
     cfg.rewards["action_rate_l2"].weight = -1.0
 
-    # Main reward: trapezoidal height target along the phase
+    # Reward principale : cible de hauteur trapèze le long de la phase
     cfg.rewards["crouch_glide_height"] = RewardTermCfg(
         func=microduck_mdp.crouch_glide_height_by_phase,
         weight=4.0,
@@ -461,13 +461,13 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
             "std": CROUCH_STD,
         },
     )
-    # Preserve the momentum (do not brake) — independent of the command
+    # Conserver l'élan (ne pas freiner) — indépendant de la commande
     cfg.rewards["forward_speed"] = RewardTermCfg(
         func=microduck_mdp.forward_speed_reward,
         weight=2.0,
         params={"vel_ref": 0.2},
     )
-    # End of phase: converge to the standing roller pose for a clean handover
+    # Fin de phase : converger vers la pose roller debout pour rendre la main proprement
     _LEG_JOINTS = [0, 1, 2, 3, 4, 9, 10, 11, 12, 13]
     _NECK_JOINTS = [5, 6, 7, 8]
     cfg.rewards["return_pose_legs"] = RewardTermCfg(
@@ -480,7 +480,7 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
         weight=3.0,
         params={"std": 0.15, "command_name": "twist", "joint_indices": _NECK_JOINTS},
     )
-    # Glide stability
+    # Stabilité de glisse
     cfg.rewards["feet_flat"] = RewardTermCfg(
         func=microduck_mdp.feet_flat_penalty,
         weight=-2.0,
@@ -512,7 +512,7 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
     )
     del cfg.events["foot_friction"]
 
-    # Entry velocity: the robot starts rolling forward (momentum to preserve)
+    # Vitesse d'entrée : le robot démarre en roulant vers l'avant (élan à conserver)
     cfg.events["entry_velocity"] = EventTermCfg(
         func=mdp.push_by_setting_velocity,
         mode="reset",
@@ -658,7 +658,7 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
             func=microduck_mdp.zero_command_padding, params={"dim": 6},
         )
 
-    # === COMMAND: phase (like ground_pick) ===
+    # === COMMAND: phase (comme ground_pick) ===
     command: UniformVelocityCommandCfg = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
     command.rel_heading_envs = 0.0
@@ -751,9 +751,9 @@ MicroduckRollerCrouchRlCfg = RslRlOnPolicyRunnerCfg(
 )
 ```
 
-- [ ] **Step 4: Register the task**
+- [ ] **Step 4: Enregistrer la tâche**
 
-In `src/mjlab_microduck/tasks/__init__.py`, add the import after the rollers block (after line 54):
+Dans `src/mjlab_microduck/tasks/__init__.py`, ajouter l'import après le bloc rollers (après la ligne 54) :
 
 ```python
 from .microduck_roller_crouch_env_cfg import (
@@ -762,7 +762,7 @@ from .microduck_roller_crouch_env_cfg import (
 )
 ```
 
-and the registration after the rollers block (after line 175):
+et l'enregistrement après le bloc rollers (après la ligne 175) :
 
 ```python
 register_mjlab_task(
@@ -775,60 +775,60 @@ register_mjlab_task(
 print("✓ RollerCrouch task registered: Mjlab-RollerCrouch-Flat-MicroDuck")
 ```
 
-- [ ] **Step 5: Verify the smoke test passes**
+- [ ] **Step 5: Vérifier le passage du smoke test**
 
 Run: `uv run --with pytest pytest tests/test_roller_crouch_cfg.py -v`
-Expected: PASS (3 tests). (This test builds the env — it compiles the MuJoCo spec, so it is slower; that is normal.)
+Expected: PASS (3 tests). (Ce test construit l'env — il compile le spec MuJoCo, donc il est plus lent ; c'est normal.)
 
-- [ ] **Step 6: Verify the task is properly registered**
+- [ ] **Step 6: Vérifier que la tâche est bien enregistrée**
 
 Run: `uv run python -c "import mjlab_microduck.tasks"`
-Expected: the line `✓ RollerCrouch task registered: Mjlab-RollerCrouch-Flat-MicroDuck` is printed without error.
+Expected: la ligne `✓ RollerCrouch task registered: Mjlab-RollerCrouch-Flat-MicroDuck` s'affiche sans erreur.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py \
         src/mjlab_microduck/tasks/__init__.py tests/test_roller_crouch_cfg.py
-git commit -m "roller-crouch: crouch-glide env + task registration"
+git commit -m "roller-crouch: env crouch-glide + enregistrement de la tache"
 ```
 
 ---
 
-## Task 4: Training smoke run (runtime verification)
+## Task 4: Smoke run d'entraînement (vérification runtime)
 
-**Files:** none (observational check).
+**Files:** aucun (vérification observationnelle).
 
 **Interfaces:**
-- Consumes: the `Mjlab-RollerCrouch-Flat-MicroDuck` task (Task 3).
+- Consumes: la tâche `Mjlab-RollerCrouch-Flat-MicroDuck` (Task 3).
 
-- [ ] **Step 1: Run a very short training**
+- [ ] **Step 1: Lancer un entraînement très court**
 
 Run:
 ```bash
 uv run train Mjlab-RollerCrouch-Flat-MicroDuck \
   --env.scene.num-envs 64 --agent.max_iterations 5
 ```
-Expected: training starts, logs the rewards (including `crouch_glide_height`, `forward_speed`), runs 5 iterations without crashing, and writes a checkpoint.
+Expected: l'entraînement démarre, log les rewards (dont `crouch_glide_height`, `forward_speed`), 5 itérations sans crash, un checkpoint est écrit.
 
-- [ ] **Step 2: Check for obs-shape errors**
+- [ ] **Step 2: Vérifier l'absence d'erreur de forme d'obs**
 
-Inspect the startup log: the actor obs must be **61D** (like the other policies in the family). If the dimension differs, the head/body padding or the wheel exclusion is miswired — fix it before continuing.
+Inspecter le log de démarrage : l'obs actor doit être **61D** (comme les autres policies de la famille). Si la dim diffère, le padding head/body ou l'exclusion des roues est mal câblé — corriger avant de continuer.
 
-- [ ] **Step 3: Commit (if a config file had to be adjusted)**
+- [ ] **Step 3: Commit (si un fichier de conf a dû être ajusté)**
 
 ```bash
-git add -A && git commit -m "roller-crouch: post smoke-run adjustment"
+git add -A && git commit -m "roller-crouch: ajustement post smoke-run"
 ```
-(If there is nothing to commit, skip this step.)
+(S'il n'y a rien à committer, sauter cette étape.)
 
 ---
 
-## Task 5: Full training + play verification
+## Task 5: Entraînement complet + vérification en play
 
-**Files:** possible iterations on `microduck_roller_crouch_env_cfg.py` (reward weights, `CROUCH_HEIGHT_LOW`).
+**Files:** itérations possibles sur `microduck_roller_crouch_env_cfg.py` (poids de reward, `CROUCH_HEIGHT_LOW`).
 
-- [ ] **Step 1: Run the full training**
+- [ ] **Step 1: Lancer l'entraînement complet**
 
 Run:
 ```bash
@@ -836,39 +836,39 @@ uv run train Mjlab-RollerCrouch-Flat-MicroDuck \
   --env.scene.num-envs 4096 --agent.max_iterations 8000
 ```
 
-- [ ] **Step 2: Visualize in play**
+- [ ] **Step 2: Visualiser en play**
 
-Run: `uv run scripts/play_latest.py` (or the project's play entry point for this task).
-Watch the cycle: the robot **goes down**, **glides ~1 s** with the wheels still turning (it does not brake), then **stands back up** and the final pose rejoins the standing roller pose. It must not fall.
+Run: `uv run scripts/play_latest.py` (ou l'entrée play du projet pour cette tâche).
+Observer le cycle : le robot **descend**, **glisse ~1 s** avec les roues qui continuent de tourner (il ne freine pas), puis **se relève** et la pose finale rejoint la pose roller debout. Il ne doit pas tomber.
 
-- [ ] **Step 3: Iterate if needed**
+- [ ] **Step 3: Itérer si nécessaire**
 
-Typical adjustments (in `microduck_roller_crouch_env_cfg.py`):
-- It does not go down far enough → lower `CROUCH_HEIGHT_LOW` (e.g. 0.07) and/or raise the `crouch_glide_height` weight.
-- It brakes during the crouch → raise the `forward_speed` weight.
-- It falls in the low position → raise `upright`, lower the entry velocity `ENTRY_VELOCITY_X`, or shorten the plateau (bring `hold_lo`/`hold_hi` closer together).
-- The rise is brutal → raise `return_pose_*` and/or `action_rate_l2`.
+Réglages typiques (dans `microduck_roller_crouch_env_cfg.py`) :
+- Il ne descend pas assez → baisser `CROUCH_HEIGHT_LOW` (ex. 0.07) et/ou monter le poids de `crouch_glide_height`.
+- Il freine pendant l'accroupi → monter le poids de `forward_speed`.
+- Il tombe en position basse → monter `upright`, baisser la vitesse d'entrée `ENTRY_VELOCITY_X`, ou raccourcir le palier (rapprocher `hold_lo`/`hold_hi`).
+- La remontée est brutale → monter `return_pose_*` et/ou `action_rate_l2`.
 
-After each change, retrain and re-visualize. Commit each adjustment you keep:
+Après chaque changement, relancer un entraînement et re-visualiser. Committer chaque réglage retenu :
 ```bash
 git add src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py
-git commit -m "roller-crouch: tune <what changed>"
+git commit -m "roller-crouch: reglage <ce qui a change>"
 ```
 
 ---
 
-## Task 6: ONNX export + deployment on the robot
+## Task 6: Export ONNX + déploiement sur le robot
 
-**Files:** none (manual / hardware).
+**Files:** aucun (manuel / matériel).
 
-- [ ] **Step 1: Export the policy to ONNX**
+- [ ] **Step 1: Exporter la policy en ONNX**
 
-Run: `uv run scripts/export_latest.py` (the obs normalizer is baked into the graph by `scripts/export.py`).
-Collect the `.onnx` file, rename it `roller_crouch.onnx`, and copy it onto the robot (e.g. `~/microduck/policies/roller_crouch.onnx`).
+Run: `uv run scripts/export_latest.py` (le normaliseur d'obs est baké dans le graphe par `scripts/export.py`).
+Récupérer le fichier `.onnx`, le renommer `roller_crouch.onnx`, le copier sur le robot (ex. `~/microduck/policies/roller_crouch.onnx`).
 
-- [ ] **Step 2: Launch the runtime with the ground-pick slot**
+- [ ] **Step 2: Lancer le runtime avec le slot ground-pick**
 
-On the robot:
+Sur le robot :
 ```bash
 microduck_runtime --variant pre-alpha --new-cmd-obs --roller \
   --model output.onnx \
@@ -880,20 +880,20 @@ microduck_runtime --variant pre-alpha --new-cmd-obs --roller \
   --ground-pick-action-scale 0.8
 ```
 
-**Critical parameters (sim2real parity):**
-- `--ground-pick-kp-ratio 1.0` — the 0.6 default would lower kp to 120 while we train at 200.
-- `--ground-pick-action-scale 0.8` — must match the training `action_scale`.
-- `--ground-pick-period 5.0` — must match the trained period.
+**Paramètres critiques (parité sim2real) :**
+- `--ground-pick-kp-ratio 1.0` — le défaut 0.6 baisserait kp à 120 alors qu'on entraîne à 200.
+- `--ground-pick-action-scale 0.8` — doit matcher l'`action_scale` d'entraînement.
+- `--ground-pick-period 5.0` — doit matcher la période entraînée.
 
-- [ ] **Step 3: Test the gesture**
+- [ ] **Step 3: Tester le geste**
 
-Run the robot forward at low speed and press **A**. Check: it crouches, glides ~1 s, stands back up, and the roller policy cleanly takes back control. If unstable, go back to Task 5 (iterate on the weights / the height / the entry velocity).
+Lancer le robot à petite vitesse en avant, appuyer sur **A**. Vérifier : il s'accroupit, glisse ~1 s, se relève, et la policy roller reprend la main proprement. Si instable, revenir à la Task 5 (itérer sur les poids / la hauteur / la vitesse d'entrée).
 
 ---
 
-## Verification notes (self-review)
+## Notes de vérification (self-review)
 
-- **Spec coverage:** 1 s trapezoidal target (Task 1); crouch + anti-braking + return-pose rewards (Task 2/3); roller robot + phase + 61D obs + DR (Task 3); entry velocity (Task 3, the `entry_velocity` event); deployment flags including the `kp-ratio` pitfall (Task 6). ✅
-- **Phase vs velocity pitfall:** the roller env's `wheel_speed_reward`/`braking`/`coasting_reward` use `command[:,0]` as a *velocity* — invalid here, where `command[:,0]=cos(2πφ)`. They are therefore **removed** and replaced with `forward_speed_reward` (command-independent). Tested by `test_cfg_has_crouch_and_forward_rewards`.
-- **Naming consistency:** `crouch_glide_height` (the reward key) vs `crouch_glide_height_by_phase` (the function) — intentional: the key is the term's name, the function goes in `func=`.
+- **Couverture spec :** cible trapèze 1 s (Task 1) ; rewards crouch + anti-freinage + return-pose (Task 2/3) ; robot rollers + phase + obs 61D + DR (Task 3) ; vitesse d'entrée (Task 3, event `entry_velocity`) ; flags de déploiement dont le piège `kp-ratio` (Task 6). ✅
+- **Piège phase vs vitesse :** `wheel_speed_reward`/`braking`/`coasting_reward` du roller env utilisent `command[:,0]` comme *vitesse* — invalide ici où `command[:,0]=cos(2πφ)`. Elles sont donc **retirées** et remplacées par `forward_speed_reward` (indépendante de la commande). Testé par `test_cfg_has_crouch_and_forward_rewards`.
+- **Cohérence des noms :** `crouch_glide_height` (clé reward) vs `crouch_glide_height_by_phase` (fonction) — voulu : la clé est le nom du terme, la fonction est `func=`.
 ```

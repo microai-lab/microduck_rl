@@ -6,10 +6,9 @@ returns to a clean standing pose — all while remaining stable and robust to
 pushes.  The obs/action spaces are identical to the walking policy so the two
 can be switched at runtime with a single key-press.
 
-Task-space objective (no DOWN pose): mouth_ground_proximity pulls the mouth
-toward the ground, head_impact_penalty (strong) forbids contact -> the
-equilibrium is the mouth just above it; mouth_perpendicular_to_ground orients it
-downward.
+Objectif espace-tâche (pas de pose DOWN) : mouth_ground_proximity tire la bouche
+vers le sol, head_impact_penalty (fort) interdit le contact -> équilibre = bouche
+juste au-dessus ; mouth_perpendicular_to_ground l'oriente vers le bas.
 
 Phase encoding (in the command slot, 3-D):
     command = [cos(2π·phase), sin(2π·phase), 0]
@@ -60,7 +59,7 @@ KD_RANDOMIZATION_RANGE           = (0.9, 1.1)
 JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
 ARMATURE_RANDOMIZATION_RANGE     = (0.9, 1.1)
 VELOCITY_PUSH_INTERVAL_S         = (3.0, 6.0)
-VELOCITY_PUSH_RANGE              = (-0.15, 0.15)  # quasi-static gesture -> gentle pushes (±0.3 knocked it over even upright)
+VELOCITY_PUSH_RANGE              = (-0.15, 0.15)  # geste quasi-statique -> pushes doux (±0.3 le faisait tomber même droit)
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0       # match velocity (was 1.0)
 ENCODER_BIAS_RANGE               = (-0.015, 0.015)
 
@@ -94,18 +93,18 @@ from mjlab_microduck.tasks.microduck_velocity_env_cfg import (
 from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg, SYMMETRY_CFG
 
 
-# ── SEGMENTED phase profile (independent durations) ─────────────────────────
-# Instead of the sinusoidal weighting (which couples descent/hold/rise), we gate
-# the rewards with a 4-segment profile: SLOW descent and rise, SHORT low hold,
-# long standing rest.
-# Durations at GP_PERIOD = 4 s:
-#   descent  [0, DESCENT_END)        1.5 s  STAND->low transition
-#   low hold [DESCENT_END, HOLD_END) 0.2 s  brief touch-close (short)
-#   rise     [HOLD_END, RISE_END)    1.5 s  low->STAND transition
-#   rest     [RISE_END, 1)           0.8 s  standing
-# ⚠️ RISE_END=0.80 > the infer_policy script's φ=0.7 cutoff: the rise is only
-# complete if the slot plays through to φ~1.0 (the whole period). Check the
-# runtime's actual window.  ⚠️ --ground-pick-period at deployment = 4.0.
+# ── Profil de phase SEGMENTÉ (durées indépendantes) ──────────────────────────
+# Au lieu de la pondération sinusoïdale (qui couple descente/palier/remontée),
+# on gate les rewards par un profil à 4 segments : descente et remontée LENTES,
+# palier bas COURT, repos debout long.
+# Durées à GP_PERIOD = 4 s :
+#   descente   [0, DESCENT_END)        1.5 s  transition STAND->bas
+#   palier bas [DESCENT_END, HOLD_END) 0.2 s  effleure (court)
+#   remontée   [HOLD_END, RISE_END)    1.5 s  transition bas->STAND
+#   repos      [RISE_END, 1)           0.8 s  debout
+# ⚠️ RISE_END=0.80 > coupure φ=0.7 du script infer_policy : la remontée n'est
+# complète que si le slot joue jusqu'à φ~1.0 (toute la période). Vérifier la
+# fenêtre réelle du runtime.  ⚠️ --ground-pick-period au déploiement = 4.0.
 GP_PERIOD    = 4.0
 DESCENT_END  = 0.375
 HOLD_END     = 0.425
@@ -181,10 +180,10 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
     # ── Rewards: main ground pick objectives ──────────────────────────────────
 
     # Approach phase: reward mouth tip getting AS CLOSE AS POSSIBLE to the ground.
-    # target_height=0 pulls the mouth toward the ground; std=0.10 gives gradient
-    # from ~20 cm away (from the standing stance). "WITHOUT TOUCHING" is enforced
-    # by head_impact_penalty (strong) further down -> the equilibrium is the
-    # mouth just above the ground. Weight raised 2.0 -> 3.0 to pull it closer.
+    # target_height=0 tire la bouche vers le sol ; std=0.10 donne du gradient dès
+    # ~20 cm (depuis la station debout). Le "SANS TOUCHER" est assuré par
+    # head_impact_penalty (fort) plus bas -> l'équilibre est la bouche juste
+    # au-dessus du sol. Poids monté 2.0 -> 3.0 pour tirer plus près.
     cfg.rewards["mouth_ground_proximity"] = RewardTermCfg(
         func=microduck_mdp.mouth_ground_proximity_phased,
         weight=3.0,
@@ -201,8 +200,8 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
 
     # Approach phase: reward mouth tip x-axis pointing downward (perpendicular to ground).
     # alignment ∈ [-1, 1]: 1 = x-axis perfectly vertical, 0 = horizontal, -1 = pointing up.
-    # Orientation: mouth axis pointing down (perpendicular to the ground). Weight
-    # raised 1.0 -> 2.0 -> "orient it correctly" is an explicit objective.
+    # Orientation : axe bouche vers le bas (perpendiculaire au sol). Poids monté
+    # 1.0 -> 2.0 -> "orienter correctement" est un objectif explicite.
     cfg.rewards["mouth_perpendicular_to_ground"] = RewardTermCfg(
         func=microduck_mdp.mouth_perpendicular_phased,
         weight=2.0,
@@ -222,7 +221,7 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
     _LEG_JOINTS = [0, 1, 2, 3, 4, 9, 10, 11, 12, 13]
     cfg.rewards["ground_pick_return_pose_legs"] = RewardTermCfg(
         func=microduck_mdp.ground_pick_return_pose_phased,
-        weight=6.0,  # 4->6: strengthens leg extension during the rise
+        weight=6.0,  # 4->6 : renforce l'extension des jambes au relever
         params={
             "std": 0.3,
             "command_name": "twist",
@@ -248,14 +247,14 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         },
     )
 
-    # RISE assist: trunk uprightness rewarded ONLY during the rise (weighted by
-    # max(0,-sin) like the pose return). The pose return alone does not guarantee
-    # dynamic balance while standing back up; this term pushes the trunk to stay
-    # vertical during the extension. Gated on the return -> does NOT hinder the
-    # forward lean of the approach (the always-on upright stays low, 0.2).
+    # Aide au RELEVER : tronc vertical récompensé UNIQUEMENT pendant la remontée
+    # (pondéré max(0,-sin) comme le retour de pose). Le retour de pose seul ne
+    # garantit pas l'équilibre dynamique en se relevant ; ce terme pousse le tronc
+    # à rester vertical pendant l'extension. Gaté sur le retour -> ne gêne PAS le
+    # penché avant de l'approche (upright always-on reste faible, 0.2).
     cfg.rewards["return_upright"] = RewardTermCfg(
         func=microduck_mdp.ground_pick_return_upright_phased,
-        weight=4.0,  # 2->4: stronger help for trunk balance during the rise
+        weight=4.0,  # 2->4 : aide plus fort l'équilibre du tronc au relever
         params={
             "asset_cfg": SceneEntityCfg("robot"),
             "std": 0.4,
@@ -265,9 +264,9 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         },
     )
 
-    # Anti nose-dive: penalizes neck velocity during the descent+hold (gate=0 on
-    # the rise -> does NOT restrict standing back up). Damps the head's plunge
-    # without preventing it from coming back.
+    # Anti-piqué : pénalise la vitesse du cou pendant la descente+palier
+    # (gate=0 à la remontée -> ne bride PAS le relever). Freine le plongeon de
+    # la tête sans l'empêcher de revenir.
     cfg.rewards["neck_vel_descent"] = RewardTermCfg(
         func=microduck_mdp.neck_vel_descent_penalty,
         weight=-0.1,
@@ -278,11 +277,10 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         },
     )
 
-    # Random weight "in the mouth" during the rise (lifted object, 10-40 g per
-    # episode). Weight-0 reward: acts as a per-step hook that applies the object's
-    # WEIGHT as an external force at mouth_tip, gated on the rise (phase >=
-    # HOLD_END). The payload itself is drawn at reset by the sample_mouth_payload
-    # event.
+    # Poids aléatoire "dans la bouche" au relever (objet soulevé, 10-40 g/épisode).
+    # Reward de poids 0 : sert de hook par-step qui applique le POIDS de l'objet
+    # comme force externe au mouth_tip, gaté sur la remontée (phase >= HOLD_END).
+    # Le payload lui-même est tiré au reset par l'event sample_mouth_payload.
     cfg.rewards["mouth_payload_force"] = RewardTermCfg(
         func=microduck_mdp.apply_mouth_payload_force,
         weight=0.0,
@@ -308,21 +306,21 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
 
     cfg.rewards["soft_landing"].weight = -1e-5
 
-    # Keep BOTH feet in contact throughout the pick (the feet do not lift off).
-    # NB: this is CONTACT only; the foot rolling over the ankle is handled by
-    # feet_flat below (not by this term).
+    # Keep BOTH feet in contact throughout the pick (les pieds ne décollent pas).
+    # NB: c'est le CONTACT seulement ; la bascule du pied sur la cheville est gérée
+    # par feet_flat ci-dessous (pas par ce terme).
     cfg.rewards["feet_grounded"] = RewardTermCfg(
         func=microduck_mdp.feet_grounded_reward,
         weight=3.0,
         params={"sensor_name": feet_ground_cfg.name},
     )
 
-    # FLAT feet. feet_grounded only sees CONTACT (found per foot): a foot that
-    # PIVOTS on the ankle (rolling onto its edge/toe) while keeping one contact
-    # point slips through -> "it rolls its foot over". feet_flat_penalty projects
-    # gravity into the foot site's frame: when flat, the site Z is vertical
-    # (xy²≈0); any roll -> xy²>0. It therefore forbids rolling the foot over the
-    # ankle axis.
+    # Pieds À PLAT. feet_grounded ne voit que le CONTACT (found par pied) : un pied
+    # qui PIVOTE sur la cheville (bascule sur la tranche/pointe) en gardant un point
+    # de contact passe au travers -> "il se retourne le pied". feet_flat_penalty
+    # projette la gravité dans le repère du site pied : à plat le site Z est
+    # vertical (xy²≈0) ; toute bascule -> xy²>0. Interdit donc le retournement du
+    # pied sur l'axe cheville.
     cfg.rewards["feet_flat"] = RewardTermCfg(
         func=microduck_mdp.feet_flat_penalty,
         weight=-2.0,
@@ -359,10 +357,10 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         params={"sensor_name": self_collision_cfg.name},
     )
 
-    # No-touch enforcement: we do NOT want contact (the mouth must stay just
-    # above). Strong penalty and low threshold -> any ground contact is expensive.
-    # This is the term that, opposing mouth_ground_proximity, sets the "as close
-    # as possible without touching" equilibrium.
+    # No-touch enforcement : on ne VEUT PAS de contact (la bouche doit rester juste
+    # au-dessus). Pénalité forte et seuil bas -> tout contact au sol coûte cher.
+    # C'est ce terme qui, contre mouth_ground_proximity, fixe l'équilibre "au plus
+    # près sans toucher".
     cfg.rewards["head_impact_penalty"] = RewardTermCfg(
         func=microduck_mdp.body_impact_cost,
         weight=-2.0,
@@ -461,9 +459,9 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
     command: UniformVelocityCommandCfg = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
     command.rel_heading_envs  = 0.0
-    # Period = GP_PERIOD (6 s). The segmented profile (constants at the top of the
-    # file) decouples descent/hold/rise/rest: descent & rise ~1.5 s (slow -> no
-    # loss of balance), low hold ~0.6 s (short), rest ~2.4 s.
+    # Période = GP_PERIOD (6 s). Le profil segmenté (constantes en tête de fichier)
+    # découple descente/palier/remontée/repos : descente & remontée ~1.5 s
+    # (lentes -> pas de déséquilibre), palier bas ~0.6 s (court), repos ~2.4 s.
     cfg.commands["twist"] = microduck_mdp.GroundPickPhaseCommandCfg(
         **{**vars(command), "class_type": microduck_mdp.GroundPickPhaseCommand, "period": GP_PERIOD}
     )
@@ -488,9 +486,8 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         mode="reset",
     )
 
-    # Random weight "in the mouth": drawn per episode (10-40 g), applied during
-    # the rise by the mouth_payload_force hook. Emulates the robot lifting an
-    # object.
+    # Poids aléatoire "dans la bouche" : tiré par épisode (10-40 g), appliqué au
+    # relever par le hook mouth_payload_force. Imagine que le robot soulève un objet.
     cfg.events["sample_mouth_payload"] = EventTermCfg(
         func=microduck_mdp.sample_mouth_payload,
         mode="reset",
@@ -501,9 +498,9 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
     cfg.events["reset_base"].params["pose_range"]["z"] = (0.12, 0.13)
 
     if ENABLE_VELOCITY_PUSHES:
-        # Play: spaced-out interval (2-4 s) so the gesture is judged on realistic
-        # behavior, not under a barrage (0.5-1 s was an aggressive stress test
-        # that "knocked it over even upright").
+        # Play : intervalle espacé (2-4 s) pour juger le geste sur un comportement
+        # réaliste, pas sous mitraille (0.5-1 s était un stress-test agressif qui
+        # faisait "tomber même droit").
         interval = (2.0, 4.0) if play else VELOCITY_PUSH_INTERVAL_S
         cfg.events["push_robot"] = EventTermCfg(
             func=mdp.push_by_setting_velocity,

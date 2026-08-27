@@ -55,9 +55,9 @@ apt-get install -qq -y --no-install-recommends git curl ca-certificates xz-utils
 # "The wheel is invalid: Missing .dist-info directory").
 curl -LsSf https://astral.sh/uv/0.11.30/install.sh | sh >/dev/null
 export PATH="/root/.local/bin:$PATH"
-# HF Jobs puts the uv cache and /work on different filesystems -> uv cannot
-# hardlink, and its fallback corrupts built wheels (bam -> "Missing .dist-info
-# directory"). copy = reliable install (the remedy uv itself suggests).
+# HF Jobs met le cache uv et /work sur des FS différents -> uv ne peut pas
+# hardlink et son fallback corrompt les wheels construits (bam -> "Missing
+# .dist-info directory"). copy = install fiable (le remède que uv suggère).
 export UV_LINK_MODE=copy
 
 mkdir -p /work && cd /work

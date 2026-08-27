@@ -1,20 +1,20 @@
 """Find the latest wandb run for a given user and launch `uv run play`.
 
-By default: the very latest run (across all tasks).
-With a type flag, the latest run of THAT type only:
-    md-play --crouch      # latest Mjlab-RollerCrouch-...
-    md-play --roller      # latest Mjlab-...-Rollers
-    md-play --swizzle     # latest Mjlab-...-Swizzle-...
-    md-play --slope       # latest Mjlab-RollerSlope-...
-Unknown arguments are forwarded verbatim to `uv run play`
-(e.g. md-play --crouch --action-scale 0.8).
+Par défaut : le tout dernier run (toutes tâches confondues).
+Avec un flag de type, le dernier run de CE type seulement :
+    md-play --crouch      # dernier Mjlab-RollerCrouch-...
+    md-play --roller      # dernier Mjlab-...-Rollers
+    md-play --swizzle     # dernier Mjlab-...-Swizzle-...
+    md-play --slope       # dernier Mjlab-RollerSlope-...
+Les arguments inconnus sont transmis tels quels à `uv run play`
+(ex: md-play --crouch --action-scale 0.8).
 """
 
 import argparse
 
 from wandb_utils import resolve_run, run_command
 
-# flag -> substring looked up in the task_id (metadata args[0])
+# flag -> sous-chaîne recherchée dans le task_id (metadata args[0])
 TYPE_SUBSTR = {
     "crouch": "Crouch",     # Mjlab-RollerCrouch-Flat-MicroDuck
     "roller": "MicroDuck-Rollers",  # Mjlab-Velocity-Flat-MicroDuck-Rollers (≠ RollerSlope/RollerCrouch)

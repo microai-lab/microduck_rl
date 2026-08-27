@@ -1,19 +1,19 @@
-"""Inspect the slope-mode ramp (roller_slope) in the MuJoCo viewer.
+"""Observer la rampe du mode pente (roller_slope) dans le viewer MuJoCo.
 
-Builds ONLY the "flat + ramp" terrain (FlatRampTerrainCfg), across several rows
-of increasing difficulty (steepness 2° -> 20°), and opens the native MuJoCo
-viewer. No trained policy is needed — this exists to eyeball the geometry
-(flat/ramp joint, direction of descent).
+Construit UNIQUEMENT le terrain « plat + rampe » (FlatRampTerrainCfg), sur
+plusieurs rangées de difficulté croissante (raideur 2° -> 20°), et ouvre le
+viewer natif MuJoCo. Aucune politique entraînée n'est nécessaire — c'est fait
+pour valider à l'œil la géométrie (jointure plat/rampe, sens de descente).
 
-Usage:
+Usage :
     uv run python scripts/view_slope_terrain.py
     uv run python scripts/view_slope_terrain.py --rows 6 --ramp-max 8 --runout 4
-    uv run python scripts/view_slope_terrain.py --build-only   # test without GUI
+    uv run python scripts/view_slope_terrain.py --build-only   # test sans GUI
 
-In the viewer: scroll wheel to zoom, left-click drag to orbit, right-click drag
-to pan. Each row is a progressively steeper ramp (difficulty 0 -> 1), of a length
-drawn at random from [ramp-min, ramp-max], ending in a flat runout. "Forward"
-(+x) must go downhill.
+Dans le viewer : molette pour zoomer, clic-gauche glisser pour orbiter,
+clic-droit glisser pour translater. Chaque rangée est une rampe de plus en plus
+raide (difficulté 0 -> 1), de longueur tirée au hasard dans [ramp-min, ramp-max],
+et se termine par un plat de sortie. « Devant » (+x) doit descendre.
 """
 
 import argparse
@@ -30,13 +30,13 @@ from mjlab_microduck.tasks.slope_terrain import (
 
 
 def build_model(rows, size, flat_length, ramp_range, runout, deg_min, deg_max):
-    """Build the MuJoCo model of the terrain alone (rows ramps of increasing steepness)."""
+    """Construit le modèle MuJoCo du terrain seul (rows rampes de raideur croissante)."""
     cfg = TerrainGeneratorCfg(
         seed=0,
         size=size,
         num_rows=rows,
         num_cols=1,
-        curriculum=True,  # difficulty increases along the rows
+        curriculum=True,  # difficulté croissante le long des rangées
         difficulty_range=(0.0, 1.0),
         add_lights=True,
         sub_terrains={
@@ -58,15 +58,15 @@ def build_model(rows, size, flat_length, ramp_range, runout, deg_min, deg_max):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--rows", type=int, default=5, help="Number of rows = number of steepness levels shown (default 5)")
-    p.add_argument("--size", type=float, nargs=2, default=(15.0, 4.0), help="Tile size (x y) in m")
-    p.add_argument("--flat-length", type=float, default=2.0, help="Length of the starting flat (m)")
-    p.add_argument("--ramp-min", type=float, default=3.0, help="Minimum horizontal ramp length (m)")
-    p.add_argument("--ramp-max", type=float, default=8.0, help="Maximum horizontal ramp length (m)")
-    p.add_argument("--runout", type=float, default=4.0, help="Length of the flat runout (m)")
-    p.add_argument("--deg-min", type=float, default=RAMP_DEG_MIN, help=f"Minimum steepness in degrees (default {RAMP_DEG_MIN})")
-    p.add_argument("--deg-max", type=float, default=RAMP_DEG_MAX, help=f"Maximum steepness in degrees (default {RAMP_DEG_MAX})")
-    p.add_argument("--build-only", action="store_true", help="Build the model and exit (test without GUI)")
+    p.add_argument("--rows", type=int, default=5, help="Nb de rangées = nb de raideurs affichées (défaut 5)")
+    p.add_argument("--size", type=float, nargs=2, default=(15.0, 4.0), help="Taille d'une tuile (x y) en m")
+    p.add_argument("--flat-length", type=float, default=2.0, help="Longueur du plat de départ (m)")
+    p.add_argument("--ramp-min", type=float, default=3.0, help="Longueur horizontale mini de la rampe (m)")
+    p.add_argument("--ramp-max", type=float, default=8.0, help="Longueur horizontale maxi de la rampe (m)")
+    p.add_argument("--runout", type=float, default=4.0, help="Longueur du plat de sortie (m)")
+    p.add_argument("--deg-min", type=float, default=RAMP_DEG_MIN, help=f"Raideur min en degrés (défaut {RAMP_DEG_MIN})")
+    p.add_argument("--deg-max", type=float, default=RAMP_DEG_MAX, help=f"Raideur max en degrés (défaut {RAMP_DEG_MAX})")
+    p.add_argument("--build-only", action="store_true", help="Construit le modèle et quitte (test sans GUI)")
     args = p.parse_args()
 
     model = build_model(
@@ -82,15 +82,15 @@ def main():
     mujoco.mj_forward(model, data)
 
     print(
-        f"Terrain built: {args.rows} ramps, steepness {args.deg_min}°->{args.deg_max}°, "
-        f"ramp length {args.ramp_min}-{args.ramp_max}m + runout {args.runout}m, "
-        f"{model.ngeom} geoms."
+        f"Terrain construit : {args.rows} rampes, raideur {args.deg_min}°->{args.deg_max}°, "
+        f"longueur rampe {args.ramp_min}-{args.ramp_max}m + sortie {args.runout}m, "
+        f"{model.ngeom} géométries."
     )
     if args.build_only:
-        print("--build-only: OK, no GUI.")
+        print("--build-only : OK, pas de GUI.")
         return
 
-    print("Opening the MuJoCo viewer (Ctrl+C to quit)…")
+    print("Ouverture du viewer MuJoCo (Ctrl+C pour quitter)…")
     with mujoco.viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False) as viewer:
         while viewer.is_running():
             mujoco.mj_forward(model, data)

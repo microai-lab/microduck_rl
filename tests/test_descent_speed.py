@@ -1,5 +1,5 @@
-"""descent_speed_reward: rewards forward speed down the slope (world +x),
-capped at `cap`, zero if the robot backs up / climbs, NaN-safe.
+"""descent_speed_reward : récompense la vitesse d'avance vers le bas de la pente
+(monde +x), plafonnée à `cap`, nulle si le robot recule/remonte, NaN-safe.
 """
 
 import torch
@@ -10,7 +10,7 @@ from mjlab_microduck.tasks.mdp import descent_speed_reward
 class _Data:
     def __init__(self, vx):
         self.root_link_lin_vel_w = torch.tensor(vx, dtype=torch.float32).reshape(-1, 1).repeat(1, 3)
-        # only column 0 (x) is read; we put vx in x
+        # seule la colonne 0 (x) est lue ; on met vx en x
         self.root_link_lin_vel_w[:, 0] = torch.tensor(vx, dtype=torch.float32)
 
 

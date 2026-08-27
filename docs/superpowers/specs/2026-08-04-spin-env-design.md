@@ -1,276 +1,276 @@
-# Spec — "Spin" env (fast spin in place, on rollers)
+# Spec — Env « Spin » (rotation rapide sur place, sur rollers)
 
-Date: 2026-08-04. Branch: `new_pre_alpha_rollers`.
+Date : 2026-08-04. Branche : `new_pre_alpha_rollers`.
 
-> **Amendment (after the first run)**: the first calibration run (500 it.)
-> showed that the robot falls systematically around 1.16 s, well before the
-> braking segment. In response, the target was halved — `SPIN_RATE_MAX`
-> 6.0 → **3.0 rad/s**, i.e. **1 turn per cycle instead of 2** — and
-> `spin_stay_in_place` strengthened to **−3.0**, **without a curriculum** on speed.
-> See "Initial verification results" for the evidence and the configuration
-> currently in force.
+> **Amendement (après le premier run)** : le premier run de calibrage (500 it.)
+> a montré que le robot tombe systématiquement vers 1,16 s, bien avant le
+> freinage. En réponse, la cible a été réduite de moitié — `SPIN_RATE_MAX`
+> 6.0 → **3.0 rad/s**, soit **1 tour par cycle au lieu de 2** — et
+> `spin_stay_in_place` renforcé à **−3.0**, **sans curriculum** de vitesse.
+> Voir « Résultats de la vérification initiale » pour les preuves et la
+> configuration actuellement en vigueur.
 
-## Goal
+## But
 
-A new RL task that teaches the microduck on rollers to perform a **spin**:
-~2 counter-clockwise turns in place at ~6 rad/s (360°/s) *(the initial target; reduced
-to 3 rad/s, see the amendment)*, then a clean stop standing up.
-A **cyclic, phase-driven gesture**, deployed in a **one-shot button slot**
-of the runtime, like the existing `roller_crouch` task.
+Une nouvelle tâche RL qui apprend au microduck sur rollers à faire un **spin** :
+~2 tours anti-horaire sur place à ~6 rad/s (360°/s) *(cible initiale ; ramenée
+à 3 rad/s, voir l'amendement)*, puis arrêt propre debout.
+Geste **cyclique piloté par une phase**, déployé dans un **slot bouton one-shot**
+du runtime, comme la tâche `roller_crouch` existante.
 
-## Settled decisions
+## Décisions cadrées
 
-| Question | Decision |
+| Question | Décision |
 |---|---|
-| Support | On rollers (`MICRODUCK_WALK_ROLLERS_ROBOT_CFG`, 4 passive wheels) |
-| Steering | One-shot button slot, command = phase `[cos(2πφ), sin(2πφ), 0]` |
-| Target | ~6 rad/s, 2 turns, then braking to a stop (the initial target; reduced to 3 rad/s, see the amendment) |
-| Entry state | At a standstill **or** rolling slowly (0 → 0.3 m/s) |
-| Direction | Left only (positive yaw, counter-clockwise) |
-| Approach | "Outcome" objective (tracking ω_z) + a decaying antisymmetric priming term |
+| Support | Sur rollers (`MICRODUCK_WALK_ROLLERS_ROBOT_CFG`, 4 roues passives) |
+| Pilotage | Slot bouton one-shot, commande = phase `[cos(2πφ), sin(2πφ), 0]` |
+| Cible | ~6 rad/s, 2 tours, puis freinage jusqu'à l'arrêt (cible initiale ; ramenée à 3 rad/s, voir l'amendement) |
+| État d'entrée | À l'arrêt **ou** en roulement lent (0 → 0.3 m/s) |
+| Sens | Gauche uniquement (lacet positif, anti-horaire) |
+| Approche | Objectif « résultat » (suivi de ω_z) + amorce antisymétrique décroissante |
 
-**Runtime constraint**: the slot only sends `[cos, sin, 0]` — no free channel
-for the rotation direction. The policy therefore **always spins left**. A mirrored
-policy could later go into another slot (button B, `--fold-policy`).
+**Contrainte runtime** : le slot n'envoie que `[cos, sin, 0]` — aucun canal libre
+pour le sens de rotation. La policy tourne donc **toujours à gauche**. Une policy
+miroir pourrait plus tard aller dans un autre slot (bouton B, `--fold-policy`).
 
-## Target physical mechanism
+## Mécanique physique visée
 
-On 4 passive wheels, a "clean" spin in place is achieved through **differential
-rolling**: the left skate goes backward, the right one forward (the wheels **roll**,
-they do not skid). This is an *antisymmetric swizzle*: the legs do the opposite of
-each other, instead of the classic swizzle's mirror.
+Sur 4 roues passives, la rotation sur place « propre » se fait en **roulement
+différentiel** : le patin gauche part vers l'arrière, le droit vers l'avant (les
+roues **roulent**, elles ne patinent pas). C'est un *swizzle antisymétrique* : les
+jambes font l'inverse l'une de l'autre, au lieu du miroir du swizzle classique.
 
-Sign check for a counter-clockwise rotation (frame: x forward, y left,
-z up; ω_z > 0): a point on the left (+y) has velocity `ω ẑ × y ŷ = −ω y x̂`,
-i.e. **backward**. All 4 wheels spin positive when moving forward (verified by
-`test_wheel_direction.py`), so for a counter-clockwise spin:
-`ω_left_wheels < 0`, `ω_right_wheels > 0`, i.e. **`ω_R − ω_L > 0`**.
+Vérification des signes pour une rotation anti-horaire (repère : x avant, y gauche,
+z haut ; ω_z > 0) : un point à gauche (+y) a pour vitesse `ω ẑ × y ŷ = −ω y x̂`,
+donc **vers l'arrière**. Les 4 roues tournent positif en marche avant (vérifié par
+`test_wheel_direction.py`), donc pour un spin anti-horaire :
+`ω_roues_gauche < 0`, `ω_roues_droite > 0`, soit **`ω_D − ω_G > 0`**.
 
-## Chosen approach (C) and why
+## Approche retenue (C) et pourquoi
 
-Three approaches were considered:
+Trois approches ont été considérées :
 
-- **A — pure "outcome" objective**: reward the yaw rate and let PPO find the gesture.
-  Risk documented in this repo: a lazy optimum /
-  skid-hopping instead of clean rolling.
-- **B — "directive" objective through poses**: two scissor poses interpolated along the
-  phase, like `roller_crouch`. Works quickly *if* the poses are good; but for the
-  crouch they were **read off the real robot**, whereas here the gesture is unknown.
-  It would have to be composed by hand: expensive and risky (poses with no useful
-  torque produce nothing).
-- **C — A + a decaying antisymmetric priming term** ← **chosen**. A's structure, plus
-  two weak *shaping* terms that inject the only certain physical knowledge (differential
-  rolling), and whose weight decays by curriculum so the policy can refine its own
-  gesture. The **pumping frequency stays free**.
+- **A — objectif « résultat » pur** : on récompense la vitesse de lacet et on laisse
+  PPO trouver le geste. Risque documenté dans ce repo : optimum paresseux /
+  patinage-sautillement au lieu du roulement propre.
+- **B — objectif « directif » par poses** : deux poses de ciseau interpolées par la
+  phase, comme `roller_crouch`. Marche vite *si* les poses sont bonnes ; or pour le
+  crouch elles étaient **lues sur le vrai robot**, alors qu'ici le geste est inconnu.
+  Il faudrait le composer à la main : cher et risqué (des poses sans couple utile
+  ne produisent rien).
+- **C — A + amorce antisymétrique décroissante** ← **retenue**. Structure de A, plus
+  deux termes de *shaping* faibles qui injectent la seule connaissance physique
+  certaine (le roulement différentiel), et dont le poids décroît par curriculum pour
+  laisser la policy affiner son propre geste. La **fréquence de pompage reste libre**.
 
 ## Architecture
 
-**File**: `src/mjlab_microduck/tasks/microduck_spin_env_cfg.py`
+**Fichier** : `src/mjlab_microduck/tasks/microduck_spin_env_cfg.py`
 - factory `make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg`
-- PPO config `MicroduckSpinRlCfg`
-- task id `Mjlab-Spin-Flat-MicroDuck`, registered in `tasks/__init__.py`
+- config PPO `MicroduckSpinRlCfg`
+- task id `Mjlab-Spin-Flat-MicroDuck`, enregistré dans `tasks/__init__.py`
 
-Clones the structure of `microduck_roller_crouch_env_cfg.py`: roller robot, unified 61D
-obs, full DR, `action.scale = 1.0`, flat terrain.
+Clone la structure de `microduck_roller_crouch_env_cfg.py` : robot rollers, obs 61D
+unifié, DR complète, `action.scale = 1.0`, terrain plat.
 
-**`ENABLE_SYMMETRY = False`** — mandatory: left/right symmetry augmentation
-would turn a left spin into a right spin and destroy learning.
+**`ENABLE_SYMMETRY = False`** — obligatoire : l'augmentation de symétrie gauche/droite
+transformerait un spin à gauche en spin à droite et détruirait l'apprentissage.
 
-**Command**: `GroundPickPhaseCommandCfg(period=4.0, randomize_phase=False)`.
-`period=4.0` is the default of `--ground-pick-period` → nothing to pass at runtime.
-`randomize_phase=False` → every episode starts at φ=0 (standing), like at deployment.
+**Commande** : `GroundPickPhaseCommandCfg(period=4.0, randomize_phase=False)`.
+`period=4.0` est le défaut de `--ground-pick-period` → rien à passer au runtime.
+`randomize_phase=False` → chaque épisode démarre à φ=0 (debout), comme au déploiement.
 
-## Phase envelope
+## Enveloppe de phase
 
-The phase drives a **target yaw rate** ω\*(φ), trapezoidal over 4 segments
-(4 s period, `SPIN_RATE_MAX = 6.0` rad/s — the initial target; reduced to 3 rad/s,
-see the amendment; the segments and the period are unchanged):
+La phase pilote une **vitesse de lacet cible** ω\*(φ), en trapèze sur 4 segments
+(période 4 s, `SPIN_RATE_MAX = 6.0` rad/s — cible initiale ; ramenée à 3 rad/s,
+voir l'amendement ; les segments et la période n'ont pas changé) :
 
 ```
-ACCEL_END = 0.125   [0,     0.125)  0.5 s  ω*: 0 → 6 rad/s   (launch, linear ramp)
-HOLD_END  = 0.525   [0.125, 0.525)  1.6 s  ω* = 6 rad/s       (steady state)
-BRAKE_END = 0.650   [0.525, 0.650)  0.5 s  ω*: 6 → 0          (braking, linear ramp)
-            1.0     [0.650, 1.0)    1.4 s  ω* = 0             (standing rest)
+ACCEL_END = 0.125   [0,     0.125)  0.5 s  ω* : 0 → 6 rad/s   (lancement, rampe linéaire)
+HOLD_END  = 0.525   [0.125, 0.525)  1.6 s  ω* = 6 rad/s        (régime)
+BRAKE_END = 0.650   [0.525, 0.650)  0.5 s  ω* : 6 → 0          (freinage, rampe linéaire)
+            1.0     [0.650, 1.0)    1.4 s  ω* = 0              (repos debout)
 ```
 
-*(The ω\* = 6 rad/s values above correspond to `SPIN_RATE_MAX` = 6.0, the
-initial target; see the amendment for the value in force.)*
+*(Les valeurs ω\* = 6 rad/s ci-dessus correspondent à `SPIN_RATE_MAX` = 6.0, la
+cible initiale ; voir l'amendement pour la valeur en vigueur.)*
 
-Integral over one cycle: `0.5·3 + 1.6·6 + 0.5·3 = 12.6 rad ≈ 2.0 turns`. ✅
-*(at `SPIN_RATE_MAX = 6.0`, the initial target.)* General form: the integral equals
-`2.1 × SPIN_RATE_MAX` whatever `rate_max` is (0.25 + 1.6 + 0.25 = 2.1). With the
-target in force (3.0 rad/s): `2.1 × 3.0 = 6.3 rad ≈ 1 turn` per cycle — see
-the amendment.
+Intégrale sur un cycle : `0.5·3 + 1.6·6 + 0.5·3 = 12.6 rad ≈ 2.0 tours`. ✅
+*(à `SPIN_RATE_MAX = 6.0`, cible initiale.)* Forme générale : l'intégrale vaut
+`2.1 × SPIN_RATE_MAX` quel que soit `rate_max` (0.25 + 1.6 + 0.25 = 2.1). Avec la
+cible en vigueur (3.0 rad/s) : `2.1 × 3.0 = 6.3 rad ≈ 1 tour` par cycle — voir
+l'amendement.
 
-Episode = 20 s = **5 cycles**: the robot repeats launch → steady state → braking → rest
-five times per episode. More data per episode, and the "rest" segment also trains
-the clean exit from the trick. **Note (post-run)**: this remains true
-geometrically (20 s / 4 s), but no episode of the calibration run survived
-beyond ~1.16 s, i.e. only a fraction of the first cycle — see
-"Initial verification results".
+Épisode = 20 s = **5 cycles** : le robot répète lancement → régime → freinage → repos
+cinq fois par épisode. Plus de données par épisode, et le segment « repos » entraîne
+aussi la sortie propre du trick. **Note (post-run)** : ceci reste vrai
+géométriquement (20 s / 4 s), mais aucun épisode du run de calibrage n'a survécu
+au-delà de ~1,16 s, soit une fraction du premier cycle seulement — voir
+« Résultats de la vérification initiale ».
 
-**Pure function** `spin_rate_by_phase(phase, rate_max, accel_end, hold_end, brake_end)`
-in `mdp.py`, next to `crouch_pose_blend`. Testable without a simulator.
+**Fonction pure** `spin_rate_by_phase(phase, rate_max, accel_end, hold_end, brake_end)`
+dans `mdp.py`, à côté de `crouch_pose_blend`. Testable sans simulateur.
 
-**Shaping gate**: `gate(φ) = spin_rate_by_phase(φ) / rate_max ∈ [0, 1]`. It is 0
-over the rest segment → no priming term pushes toward the scissor at that moment, so the robot
-returns to a neutral stance. That is what gives a clean trick exit back to the roller
-policy.
+**Porte de shaping** : `gate(φ) = spin_rate_by_phase(φ) / rate_max ∈ [0, 1]`. Vaut 0
+sur le segment repos → aucune amorce ne pousse au ciseau à ce moment-là, donc le robot
+revient en station neutre. C'est ce qui donne une sortie de trick propre vers la policy
+roller.
 
 ## Rewards
 
-### Pitfalls verified in mjlab (to be handled explicitly)
+### Pièges vérifiés dans mjlab (à traiter explicitement)
 
-- `body_ang_vel` (`body_angular_velocity_penalty`) only penalizes **x/y**
-  (`ang_vel_xy`, comment "Don't penalize z-angular velocity") → **kept**
-  (weight −0.05): it suppresses roll/pitch wobble without hindering the spin.
-- `angular_momentum` (`angular_momentum_penalty`) penalizes the **3D norm** of angular
-  momentum → it would fight the spin head-on. **Removed.**
+- `body_ang_vel` (`body_angular_velocity_penalty`) ne pénalise que **x/y**
+  (`ang_vel_xy`, commentaire « Don't penalize z-angular velocity ») → **gardée**
+  (poids −0.05) : elle réprime le ballant roulis/tangage sans gêner le spin.
+- `angular_momentum` (`angular_momentum_penalty`) pénalise la **norme 3D** du moment
+  angulaire → elle combattrait directement le spin. **Supprimée.**
 
-### New rewards (to be written in `mdp.py`)
+### Nouvelles rewards (à écrire dans `mdp.py`)
 
-| Reward | Weight | Definition |
+| Reward | Poids | Définition |
 |---|---|---|
-| `spin_rate_track` | 6.0 | `exp(−((ω_z − ω*(φ))/std)²)`, `std = 1.5` rad/s. ω_z = trunk yaw in the body frame (what the IMU sees). Main objective. |
-| `spin_rate_l1` | 0.5 | `−|ω_z − ω*(φ)|`: constant-gradient bootstrap when the gaussian saturates far from the target (the same trick as `crouch_glide_pose_l1`) |
-| `spin_stay_in_place` | −3.0 (initially −1.0, see the amendment) | trunk `‖v_xy‖²` → "in place", and kills the entry momentum. No reference state, hence robust across the 5 cycles per episode |
-| `spin_wheel_differential` | 1.0 | `gate(φ) · tanh(clamp(ω_R − ω_L, min=0) / omega_scale)` with `ω_L = (LF+LR)/2`, `ω_R = (RF+RR)/2`: rewards skates rolling in opposite directions consistent with counter-clockwise → spinning **by rolling**, not by skidding. Wheels resolved by name (`passive_LF_?wheel`, …). `omega_scale = 17.0` rad/s in force (see the calibration paragraph below) |
-| `leg_antisymmetry` | 1.0 → 0.25 | `gate(φ) · (−mean|q_L − q_R|)` on `hip_pitch` and `knee`. ⚠️ mirror convention: a *symmetric* pose gives `q_L + q_R ≈ 0`, so the **scissor** is `q_L ≈ q_R`. Decays by curriculum |
-| `spin_grounded` | 0.5 | `gate(φ) · 1[n_contact ≥ 2]`: both blades on the ground, prevents "jump and twist in mid-air". The swizzle's `grounded_reward` is not reusable as-is (it weights itself by `cmd_x`, which here equals `cos(2πφ)`) |
+| `spin_rate_track` | 6.0 | `exp(−((ω_z − ω*(φ))/std)²)`, `std = 1.5` rad/s. ω_z = lacet du tronc en repère corps (ce que voit l'IMU). Objectif principal. |
+| `spin_rate_l1` | 0.5 | `−|ω_z − ω*(φ)|` : bootstrap à gradient constant quand la gaussienne sature loin de la cible (même astuce que `crouch_glide_pose_l1`) |
+| `spin_stay_in_place` | −3.0 (initialement −1.0, voir l'amendement) | `‖v_xy‖²` du tronc → « sur place », et tue l'élan d'entrée. Pas d'état de référence, donc robuste aux 5 cycles par épisode |
+| `spin_wheel_differential` | 1.0 | `gate(φ) · tanh(clamp(ω_D − ω_G, min=0) / omega_scale)` avec `ω_G = (LF+LR)/2`, `ω_D = (RF+RR)/2` : récompense les patins qui roulent en sens opposés cohérents avec l'anti-horaire → tourner **en roulement**, pas en patinage. Roues résolues par nom (`passive_LF_?wheel`, …). `omega_scale = 17.0` rad/s en vigueur (voir le paragraphe de calibrage ci-dessous) |
+| `leg_antisymmetry` | 1.0 → 0.25 | `gate(φ) · (−mean|q_G − q_D|)` sur `hip_pitch` et `knee`. ⚠️ convention miroir : une pose *symétrique* donne `q_G + q_D ≈ 0`, donc le **ciseau** c'est `q_G ≈ q_D`. Décroît par curriculum |
+| `spin_grounded` | 0.5 | `gate(φ) · 1[n_contact ≥ 2]` : les deux lames au sol, empêche « je saute et je vrille en l'air ». La `grounded_reward` du swizzle n'est pas réutilisable telle quelle (elle se pondère par `cmd_x`, qui vaut ici `cos(2πφ)`) |
 
-**Calibrating `omega_scale`** (the tanh saturation scale): at the target steady state,
-each skate advances at `v = ω_z · half_track`, so each wheel spins at
-`v / r` with `r = 0.0175` m, and the differential equals `2 · ω_z · half_track / r`.
-The leg roots are at `y = ±0.0175` m in the roller model, but the skates
-are further apart (ankle offset): the real half-track has to be **measured on the
-`left_foot` / `right_foot` sites in sim** on the first run. With a half-track
-estimated at ~0.03 m and `ω_z = 6` rad/s, the expected differential was ~20 rad/s — hence
-the initial default `omega_scale = 20.0`. **Measurement done (Task 3): real half-track
-= 0.0499 m, expected differential = 34.2 rad/s, i.e. 71% above the estimate
-— beyond the 30% threshold set by the plan.** `SPIN_WHEEL_OMEGA_SCALE` was therefore
-corrected to **34.0** (an intermediate value, in force while the target was at
-6 rad/s; since recalibrated to **17.0**, see the "Update" paragraph
-just below). See the "Initial verification results" section
-below for the details of the half-track measurement.
+**Calibrage de `omega_scale`** (échelle de saturation du tanh) : au régime visé,
+chaque patin avance à `v = ω_z · demi_voie`, donc chaque roue tourne à
+`v / r` avec `r = 0.0175` m, et le différentiel vaut `2 · ω_z · demi_voie / r`.
+Les racines de jambe sont à `y = ±0.0175` m dans le modèle rollers, mais les patins
+sont plus écartés (offset de cheville) : la demi-voie réelle est à **mesurer sur les
+sites `left_foot` / `right_foot` dans le sim** au premier run. Avec une demi-voie
+estimée à ~0.03 m et `ω_z = 6` rad/s, le différentiel attendu était ~20 rad/s — d'où
+le défaut initial `omega_scale = 20.0`. **Mesure faite (Task 3) : demi-voie réelle
+= 0.0499 m, différentiel attendu = 34.2 rad/s, soit 71 % au-dessus de l'estimation
+— au-delà du seuil de 30 % fixé par le plan.** `SPIN_WHEEL_OMEGA_SCALE` a donc été
+corrigé à **34.0** (valeur intermédiaire, en vigueur tant que la cible était à
+6 rad/s ; recalibrée depuis à **17.0**, voir le paragraphe « Mise à jour »
+juste en dessous). Voir la section « Résultats de la vérification initiale »
+ci-dessous pour le détail de la mesure de demi-voie.
 
-**Update (post-review fix wave)**: `SPIN_RATE_MAX` was reduced from 6.0 to
-**3.0 rad/s** (a human decision, without a curriculum — see below). A direct mechanical
-consequence for `omega_scale`, not an independent choice: the expected differential
-at steady state becomes `2 · 3.0 · 0.0499 / 0.0175` = **17.1 rad/s**. Leaving
-`omega_scale = 34.0` would cap the term at `tanh(17.1/34) = 0.47` of its own
-maximum, which would weaken exactly the shaping we are trying to strengthen.
-`SPIN_WHEEL_OMEGA_SCALE` is therefore re-corrected to **17.0**, with the same measured
-half-track (0.0499 m) kept as the reference.
+**Mise à jour (fix wave post-review)** : `SPIN_RATE_MAX` a été réduit de 6.0 à
+**3.0 rad/s** (décision humaine, sans curriculum — voir plus bas). Conséquence
+mécanique directe sur `omega_scale`, pas un choix indépendant : le différentiel
+attendu au régime redevient `2 · 3.0 · 0.0499 / 0.0175` = **17.1 rad/s**. Laisser
+`omega_scale = 34.0` plafonnerait le terme à `tanh(17.1/34) = 0.47` de son propre
+maximum, ce qui affaiblirait exactement le shaping que l'on cherche à renforcer.
+`SPIN_WHEEL_OMEGA_SCALE` est donc recorrigé à **17.0**, avec la même demi-voie
+mesurée (0.0499 m) conservée comme référence.
 
-### Rewards taken from `roller_crouch` (stability / sim2real)
+### Rewards reprises de `roller_crouch` (stabilité / sim2real)
 
-| Reward | Weight |
+| Reward | Poids |
 |---|---|
-| `upright` (vertical trunk) | 2.0 |
-| `feet_flat` (blades flat) | −2.0 |
+| `upright` (tronc vertical) | 2.0 |
+| `feet_flat` (lames à plat) | −2.0 |
 | `self_collisions` | −1.0 |
-| `body_ang_vel` (xy only) | −0.05 |
+| `body_ang_vel` (xy seulement) | −0.05 |
 | `action_rate_l2` | −1.0 (curriculum −0.5 → −1.0) |
 | `neck_action_rate_l2` | −0.5 |
 | `joint_torques_l2` | −1e-3 |
-| `neck_joint_pos_l2` **excluding `head_yaw`** | −0.2 |
+| `neck_joint_pos_l2` **hors `head_yaw`** | −0.2 |
 
-**The head**: neck pitch/roll held near neutral (sim2real), but
-`head_yaw` is **excluded** from the term → free to act as a flywheel to launch the
-rotation. Implementation: `neck_joint_pos_l2` resolves its joints by a hardcoded
-`.*(neck|head).*` regex; we must therefore either add a regex parameter to that
-function or write a `neck_joint_pos_l2_no_yaw` variant. Choice: **add a
-`pattern` parameter** to `neck_joint_pos_l2` (default unchanged) so as not to duplicate.
+**La tête** : tangage/roulis de la nuque tenus près du neutre (sim2real), mais
+`head_yaw` **exclu** du terme → libre de servir de volant d'inertie pour lancer la
+rotation. Implémentation : `neck_joint_pos_l2` résout ses joints par regex
+`.*(neck|head).*` en dur ; il faut donc soit ajouter un paramètre de regex à cette
+fonction, soit écrire une variante `neck_joint_pos_l2_no_yaw`. Choix : **ajouter un
+paramètre `pattern`** à `neck_joint_pos_l2` (défaut inchangé) pour ne pas dupliquer.
 
-## Reset / entry state
+## Reset / état d'entrée
 
 ```python
 cfg.events["reset_base"].params["pose_range"]["z"] = (0.1335, 0.1435)
 cfg.events["reset_base"].params["velocity_range"] = {"x": (0.0, 0.3)}
 ```
 
-Injected through `reset_root_state_uniform`. **Never** `push_by_setting_velocity` in
-`mode="reset"`: that is what produced the NaNs on the crouch (`root_vel +=` on
-a potentially divergent root velocity → the base free joint blows up).
+Injection via `reset_root_state_uniform`. **Jamais** `push_by_setting_velocity` en
+`mode="reset"` : c'est ce qui avait produit les NaN sur le crouch (`root_vel +=` sur
+une vitesse racine potentiellement divergente → le free-joint de la base explose).
 
 ## Domain randomization
 
-Identical to `roller_crouch`, with no deviation (the repo's validated sim2real recipe): trunk +
-head CoM, mass/inertia, BAM joint friction, armature, wheel friction,
-0.2 m/s pushes every 3–6 s, 6° IMU misalignment, ±0.015 rad encoder bias.
+Identique à `roller_crouch`, sans dévier (recette sim2real validée du repo) : COM
+tronc + tête, masse/inertie, friction articulaire BAM, armature, friction roues,
+pushes 0.2 m/s toutes les 3–6 s, désalignement IMU 6°, biais d'encodeurs ±0.015 rad.
 
 ## Observations
 
-The **61D layout, identical** to roller / ground_pick / crouch — the condition for the
-ONNX to load in the slot:
+Layout **61D à l'identique** de roller / ground_pick / crouch — condition pour que
+l'ONNX charge dans le slot :
 `[gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14), command(13)]`
-with `command = [twist(3), head_pose(4), body_pose(6)]`, head/body zero-padded.
+avec `command = [twist(3), head_pose(4), body_pose(6)]`, head/body zero-paddés.
 
-Hence: `base_lin_vel` removed from the actor (kept on the critic side), `height_scan` and
-`foot_height` removed, `wheel_vel` on the critic side, passive joints excluded from the
-`joint_pos`/`joint_vel` terms, delays and noise identical to the crouch.
+Donc : retrait de `base_lin_vel` de l'actor (gardé côté critic), retrait des
+`height_scan` et `foot_height`, `wheel_vel` côté critic, joints passifs exclus des
+termes `joint_pos`/`joint_vel`, délais et bruits identiques au crouch.
 
-The gyro is in the obs → the policy **observes** its own ω_z: the task is observable.
+Le gyro est dans l'obs → la policy **observe** son propre ω_z : la tâche est observable.
 
 ## Terminations
 
-`time_out`, `fell_over`, `out_of_terrain_bounds` (inherited) + `nan_state`
-(`microduck_mdp.robot_state_is_nan`), like the crouch.
+`time_out`, `fell_over`, `out_of_terrain_bounds` (héritées) + `nan_state`
+(`microduck_mdp.robot_state_is_nan`), comme le crouch.
 
 ## Curriculum
 
-| Term | Stages |
+| Terme | Étapes |
 |---|---|
 | `action_rate_weight` | −0.5 (0) → −0.8 (250 it.) → −1.0 (500 it.) |
 | `leg_antisym_weight` | 1.0 (0) → 0.5 (1500 it.) → 0.25 (3000 it.) |
 | `com_range` | 0.003 → 0.005 (500 it.) → 0.01 (1000 it.) |
 | `head_com_range` | 0.003 → 0.005 (500 it.) → 0.01 (1000 it.) |
 
-(iterations × 24 steps/env, like the other envs)
+(itérations × 24 pas/env, comme les autres envs)
 
-**No curriculum on the target speed**: 6 rad/s from the start *(the initial target;
-reduced to 3 rad/s, still without a curriculum, see the amendment)*. See "Plan B".
+**Pas de curriculum sur la vitesse cible** : 6 rad/s d'emblée *(cible initiale ;
+ramenée à 3 rad/s, toujours sans curriculum, voir l'amendement)*. Voir « Plan B ».
 
 ## PPO
 
-`MicroduckSpinRlCfg` = a copy of `MicroduckRollerCrouchRlCfg`: actor/critic
-(512, 256, 128) elu, obs normalization, adaptive PPO lr 1e-3, `desired_kl=0.01`,
+`MicroduckSpinRlCfg` = copie de `MicroduckRollerCrouchRlCfg` : actor/critic
+(512, 256, 128) elu, obs normalization, PPO adaptatif lr 1e-3, `desired_kl=0.01`,
 `num_steps_per_env=24`, `symmetry_cfg=None`, `experiment_name="spin"`,
 `run_name="spin"`, `max_iterations=8000`.
 
 ## Tests
 
-`tests/test_spin.py` — pure functions, no simulator:
-- `spin_rate_by_phase`: values at the boundaries of the 4 segments (0, rate_max, rate_max, 0, 0)
-- increasing monotonicity on the launch ramp, decreasing on the braking ramp
-- **integral over one cycle ≈ 4π** at `rate_max = 6.0` (guarantees the **shape** of the
-  trapezoid, `2.1 × rate_max` rad per cycle) — no longer protects the target in force
-  since the amendment, cf. the next bullet. Exact envelope value: 12.6 rad
-  against 4π = 12.566 → 1% tolerance
-- **the target actually shipped** (`mdp.SPIN_RATE_MAX`) does integrate to
-  `2.1 × SPIN_RATE_MAX` rad per cycle, whatever `rate_max` is — added in
-  7d916aa, this is the test that fails if the target changes without anyone thinking about the
-  number of turns. With the value in force (3.0 rad/s): 6.3 rad ≈ 1 turn
-- `gate(φ) = 0` over the whole rest segment, `∈ [0,1]` everywhere
+`tests/test_spin.py` — fonctions pures, sans simulateur :
+- `spin_rate_by_phase` : valeurs aux bornes des 4 segments (0, rate_max, rate_max, 0, 0)
+- monotonie croissante sur la rampe de lancement, décroissante sur le freinage
+- **intégrale sur un cycle ≈ 4π** à `rate_max = 6.0` (garantit la **forme** du
+  trapèze, `2.1 × rate_max` rad par cycle) — ne protège plus la cible en vigueur
+  depuis l'amendement, cf. bullet suivant. Valeur exacte de l'enveloppe : 12.6 rad
+  contre 4π = 12.566 → tolérance 1 %
+- **la cible réellement expédiée** (`mdp.SPIN_RATE_MAX`) intègre bien à
+  `2.1 × SPIN_RATE_MAX` rad par cycle, quel que soit `rate_max` — ajouté en
+  7d916aa, c'est ce test qui échoue si la cible change sans qu'on ait réfléchi au
+  nombre de tours. Avec la valeur en vigueur (3.0 rad/s) : 6.3 rad ≈ 1 tour
+- `gate(φ) = 0` sur tout le segment repos, `∈ [0,1]` partout
 
-`tests/test_spin_cfg.py` — the env builds:
-- command = `GroundPickPhaseCommand`, `period == 4.0`, `randomize_phase is False`
-- `"angular_momentum" not in cfg.rewards` (the pitfall from the rewards section)
+`tests/test_spin_cfg.py` — l'env se construit :
+- commande = `GroundPickPhaseCommand`, `period == 4.0`, `randomize_phase is False`
+- `"angular_momentum" not in cfg.rewards` (le piège de la section rewards)
 - `symmetry_cfg is None`
-- actor obs dimension == 61
-- **exact parity of the observation term ordering** (actor + critic) with
-  `roller_crouch`, group by group — added in 7d916aa, a strict condition for
-  the exported ONNX to load in the runtime slot
+- dimension de l'obs actor == 61
+- **parité exacte de l'ordre des termes d'observation** (actor + critic) avec
+  `roller_crouch`, groupe par groupe — ajouté en 7d916aa, condition stricte pour
+  que l'ONNX exporté charge dans le slot du runtime
 
-Run: `uv run --with pytest pytest tests/ -q`
+Lancer : `uv run --with pytest pytest tests/ -q`
 
-## Training / deployment
+## Entraînement / déploiement
 
 ```bash
 uv run train Mjlab-Spin-Flat-MicroDuck --env.scene.num-envs 4096 --agent.max_iterations 8000
-# watch Episode_Reward/spin_rate_track (it must rise)
+# surveiller Episode_Reward/spin_rate_track (doit monter)
 uv run scripts/play_latest.py     # alias md-play
-uv run scripts/export_latest.py   # ONNX, obs normalizer baked in
+uv run scripts/export_latest.py   # ONNX, normaliseur d'obs baké
 ```
 
 ```bash
@@ -278,140 +278,140 @@ microduck_runtime --variant pre-alpha --new-cmd-obs --roller \
   --model output.onnx --new-dxl-imu --kp 200 --action-scale 0.8 \
   --ground-pick spin.onnx \
   --ground-pick-period 4.0 \      # = SPIN_PERIOD
-  --ground-pick-kp-ratio 1.0 \    # default 0.6 -> force 1.0 (trained at kp 200)
-  --ground-pick-action-scale 0.8  # match the runtime action_scale
+  --ground-pick-kp-ratio 1.0 \    # défaut 0.6 -> forcer 1.0 (entraîné kp 200)
+  --ground-pick-action-scale 0.8  # matcher action_scale runtime
 ```
 
-Button **A** → spin, then automatic return to the roller policy.
+Bouton **A** → spin, puis retour auto à la policy roller.
 
-## Success criterion
+## Critère de succès
 
-At play time: ~2 counter-clockwise turns in ~2.6 s, trunk drift < ~10 cm, robot upright
-throughout, a stable neutral stance during the rest segment before the next cycle.
-*(Criterion formulated for the initial target of 6 rad/s / 2 turns; at 3 rad/s, see
-the amendment, it would be ~1 turn over the duration of the steady state — criterion not revised, as the
-robot does not yet stay up that long.)*
+En play : ~2 tours anti-horaire en ~2.6 s, dérive du tronc < ~10 cm, robot debout tout
+du long, station neutre stable pendant le segment repos avant le cycle suivant.
+*(Critère formulé pour la cible initiale de 6 rad/s / 2 tours ; à 3 rad/s, voir
+l'amendement, ce serait ~1 tour sur la durée du régime — critère non révisé, le
+robot ne tenant pas encore jusque-là.)*
 
-## Plan B if training plateaus
+## Plan B si l'entraînement plafonne
 
-In order:
-1. **Speed curriculum**: `SPIN_RATE_MAX` 3 → 6 rad/s (requires making
-   `rate_max` drivable by a `CurriculumTermCfg` on the reward params).
-   **Partially followed**: after the calibration run, the target was indeed
-   lowered to 3 rad/s (see the amendment), but **without a curriculum** — 3 rad/s
-   is for now a fixed target, not a starting point ramping toward 6.
-   The human chose to first see what the robot manages to do at that
-   speed before considering a gradual increase.
-2. Raise `spin_wheel_differential` and delay the decay of `leg_antisymmetry`.
-3. Widen the `std` of `spin_rate_track` (1.5 → 2.5) for a useful gradient further out.
-4. As a last resort, switch to approach B (scissor poses composed by hand
-   in a pose editor) to prime the gesture, then release it.
+Dans l'ordre :
+1. **Curriculum de vitesse** : `SPIN_RATE_MAX` 3 → 6 rad/s (nécessite de rendre
+   `rate_max` pilotable par un `CurriculumTermCfg` sur les params de reward).
+   **Partiellement suivi** : suite au run de calibrage, la cible a bien été
+   abaissée à 3 rad/s (voir l'amendement), mais **sans curriculum** — 3 rad/s
+   est pour l'instant une cible fixe, pas un point de départ ramping vers 6.
+   L'humain a choisi de voir d'abord ce que le robot parvient à faire à cette
+   vitesse avant d'envisager une remontée graduelle.
+2. Monter `spin_wheel_differential` et retarder la décroissance de `leg_antisymmetry`.
+3. Élargir `std` de `spin_rate_track` (1.5 → 2.5) pour un gradient utile plus loin.
+4. En dernier recours, basculer sur l'approche B (poses de ciseau composées à la main
+   dans un pose editor) pour amorcer le geste, puis relâcher.
 
-## Out of scope
+## Hors périmètre
 
-- Spinning right (a mirrored policy in another slot) — later.
-- A footed variant (without rollers).
-- A continuously speed-commanded spin (would require a runtime command channel).
+- Spin à droite (policy miroir dans un autre slot) — plus tard.
+- Variante à pied (sans rollers).
+- Spin commandé en vitesse continue (nécessiterait un canal de commande runtime).
 
-## Initial verification results
+## Résultats de la vérification initiale
 
-### Measured half-track and `omega_scale`
+### Demi-voie mesurée et `omega_scale`
 
-The half-track was measured on the `left_foot` / `right_foot` sites of the roller
-model: **0.0499 m**, against the spec's estimate of 0.03 m. Expected wheel
-differential at steady state (6 rad/s): `2 · 6.0 · 0.0499 / 0.0175` = **34.2 rad/s**,
-i.e. 71% above the 20.0 default — beyond the 30% threshold set by the plan.
-`SPIN_WHEEL_OMEGA_SCALE` was therefore changed from 20.0 to **34.0**. The tests keep
-passing `omega_scale=20.0` explicitly, to stay independent of the
-constant.
+La demi-voie a été mesurée sur les sites `left_foot` / `right_foot` du modèle
+rollers : **0.0499 m**, contre l'estimation de 0.03 m du spec. Différentiel de
+roues attendu au régime (6 rad/s) : `2 · 6.0 · 0.0499 / 0.0175` = **34.2 rad/s**,
+soit 71 % au-dessus du défaut 20.0 — au-delà du seuil de 30 % fixé par le plan.
+`SPIN_WHEEL_OMEGA_SCALE` a donc été changé de 20.0 à **34.0**. Les tests continuent
+de passer `omega_scale=20.0` explicitement, pour rester indépendants de la
+constante.
 
-### Smoke run (Step 2: 5 iterations, 64 envs, NaN guard)
+### Smoke run (Step 2 : 5 itérations, 64 envs, garde NaN)
 
-Completed without an exception. `Episode_Termination/nan_state` stayed at 0.0000 for
-the whole duration, and `/tmp/mjlab/nan_dumps/` was never created. The six spin
-rewards do appear in the logged `Episode_Reward/` keys: `spin_rate_track`,
+Terminé sans exception. `Episode_Termination/nan_state` est resté à 0.0000 sur
+toute la durée, et `/tmp/mjlab/nan_dumps/` n'a jamais été créé. Les six rewards
+spin apparaissent bien dans les clés `Episode_Reward/` loggées : `spin_rate_track`,
 `spin_rate_l1`, `spin_stay_in_place`, `spin_wheel_differential`, `spin_grounded`,
 `leg_antisymmetry`.
 
-Observation parity (Step 1): the list of terms in the spin env's actor obs
-is **identical** to `roller_crouch`'s — 8 terms, same order:
+Parité d'observation (Step 1) : la liste des termes de l'obs actor de l'env spin
+est **identique** à celle de `roller_crouch` — 8 termes, même ordre :
 `base_ang_vel, projected_gravity, joint_pos, joint_vel, actions, command,
-head_command, body_command`. That is the condition for the exported ONNX to load
-in the runtime slot.
+head_command, body_command`. C'est la condition pour que l'ONNX exporté charge
+dans le slot du runtime.
 
-**Usage note worth remembering**: the plan's example command with `--enable-nan-guard`
-as a bare flag is rejected by this repo's CLI — you must pass
+**Note d'usage à retenir** : la commande d'exemple du plan avec `--enable-nan-guard`
+en flag nu est rejetée par le CLI de ce repo — il faut passer
 `--enable-nan-guard True`.
 
-### 500-iteration calibration run (Step 3)
+### Run de calibrage 500 itérations (Step 3)
 
-4096 envs, 500 iterations, ~2.32 s/iteration, exit code 0, wandb logger (so
-`scripts/play_latest.py` / `md-play` finds the run).
+4096 envs, 500 itérations, ~2,32 s/itération, code de sortie 0, logger wandb (donc
+`scripts/play_latest.py` / `md-play` retrouve le run).
 
-**What was actually established**: `Mean episode length` = **57.83 steps** out of a
-1000-step episode (20 s at 50 Hz), i.e. **~1.16 s**. `Episode_Termination/fell_over`
-≈ **70**, `time_out = 0.0000`, `nan_state = 0`. The robot **falls every episode**,
-at a phase φ ≈ 0.29 — right in the middle of the steady-state segment. It never reaches the
-braking (φ ≥ 0.525) nor the rest (φ ≥ 0.650) segment: **71% of the cycle is never
-trained**.
+**Ce qui a réellement été établi** : `Mean episode length` = **57.83 pas** sur un
+épisode de 1000 pas (20 s à 50 Hz), soit **~1,16 s**. `Episode_Termination/fell_over`
+≈ **70**, `time_out = 0.0000`, `nan_state = 0`. Le robot **tombe à chaque épisode**,
+à une phase φ ≈ 0,29 — en plein milieu du segment de régime. Il n'atteint jamais le
+freinage (φ ≥ 0,525) ni le repos (φ ≥ 0,650) : **71 % du cycle n'est jamais
+entraîné**.
 
-Episode length went from 23.98 to 57.83 steps over the run: the
-rise in `Episode_Reward/spin_rate_track` (0.0291 → 0.3168) therefore mainly reflects
-**lengthening survival**, not improving tracking. The
-success criterion for this step as stated in the plan ("the curve must
-rise") **is not a valid signal** for that term: a completely
-motionless robot already scores `6.0 × 0.405 = 2.43` on it — the rest segment pays full
-price for staying upright without moving, so any policy that survives longer
-mechanically captures more of that segment, independently of tracking quality.
+La longueur d'épisode est passée de 23,98 à 57,83 pas sur la durée du run : la
+montée de `Episode_Reward/spin_rate_track` (0,0291 → 0,3168) reflète donc
+principalement une **survie qui s'allonge**, pas un suivi qui s'améliore. Le
+critère de succès de cette étape tel qu'énoncé dans le plan (« la courbe doit
+monter ») **n'est pas un signal valide** pour ce terme : un robot totalement
+immobile score déjà `6.0 × 0.405 = 2.43` dessus — le segment de repos paie plein
+tarif pour rester debout sans bouger, donc toute policy qui survit plus longtemps
+capte mécaniquement plus de ce segment-là, indépendamment de la qualité du suivi.
 
-### Derived diagnosis — estimates, not direct measurements
+### Diagnostic dérivé — estimations, pas des mesures directes
 
-The values below come from the ratio between reward terms in the last
-log block, which cancels the unknown normalization factor applied by the
-logger. To be taken as estimates, reproducible from the same
-method:
+Les valeurs ci-dessous viennent du rapport entre termes de reward dans le dernier
+bloc de log, ce qui annule le facteur de normalisation inconnu appliqué par le
+logger. À prendre comme des estimations, reproductibles à partir de la même
+méthode :
 
-**What holds up**: during the ~1.2 s it stays upright, the robot tracks the target
-fairly closely. The `spin_rate_l1 / spin_rate_track` ratio (−0.0097 / 0.3168, weights 0.5
-and 6.0, `std = 1.5`), solving `e = 0.3674 · exp(−(e/1.5)²)`: a mean absolute
-yaw-rate tracking error of ≈ **0.35 rad/s**, confirmed by two independent
-routes — that `spin_rate_l1 / spin_rate_track` ratio, and a back-calculation from
-the reward manager's normalization. It **can launch** the spin; it **cannot
-stay upright** while doing so.
+**Ce qui tient** : pendant les ~1,2 s où il reste debout, le robot suit la cible
+d'assez près. Rapport `spin_rate_l1 / spin_rate_track` (−0,0097 / 0,3168, poids 0,5
+et 6,0, `std = 1.5`), en résolvant `e = 0.3674 · exp(−(e/1.5)²)` : erreur moyenne
+absolue de suivi de vitesse de lacet ≈ **0,35 rad/s**, confirmée par deux voies
+indépendantes — ce ratio `spin_rate_l1 / spin_rate_track`, et un calcul inverse à
+partir de la normalisation du reward manager. Il **peut lancer** le spin ; il **ne
+peut pas rester debout** en le faisant.
 
-**What does not hold up**: the shaping block (`spin_wheel_differential` 1.0,
-`spin_grounded` 0.5, `spin_stay_in_place` −1.0) totals ~1.0 of weight against 6.0
-for the main objective — about **13%** of what a skidding policy
-would give up by ignoring that block. And `spin_wheel_differential` is
-**invariant to the instantaneous center of rotation**: a centered spin at 6 rad/s and a
-pivot on the left skate at 6 rad/s both produce a differential of
-34.2 — so that term does **not** encode centered rolling, only
-`spin_stay_in_place` does. `spin_stay_in_place` ≈ −0.0069 implies
-`‖v_xy‖ ≈ 0.35 m/s`: the robot is still translating, consistent with an off-center
-pivot (a skate as the pivot) rather than a rotation about the body center.
+**Ce qui ne tient pas** : le bloc de shaping (`spin_wheel_differential` 1,0,
+`spin_grounded` 0,5, `spin_stay_in_place` −1,0) totalise ~1,0 de poids contre 6,0
+pour l'objectif principal — environ **13 %** de ce qu'une policy en patinage
+renoncerait à gagner en ignorant ce bloc. Et `spin_wheel_differential` est
+**invariant au centre instantané de rotation** : un spin centré à 6 rad/s et un
+pivot sur le patin gauche à 6 rad/s produisent tous les deux un différentiel de
+34,2 — ce terme n'encode donc **pas** le roulement centré, seul
+`spin_stay_in_place` le fait. `spin_stay_in_place` ≈ −0,0069 implique
+`‖v_xy‖ ≈ 0,35 m/s` : le robot est encore en translation, cohérent avec un pivot
+excentré (patin comme pivot) plutôt qu'une rotation autour du centre du corps.
 
-### Configuration change decided from this diagnosis
+### Changement de configuration décidé suite à ce diagnostic
 
-Target halved — `SPIN_RATE_MAX` 6.0 → **3.0 rad/s** — and
-`spin_stay_in_place` strengthened −1.0 → **−3.0** (see the rewards table and
-`SPIN_WHEEL_OMEGA_SCALE` recalibrated to 17.0 above). **Deliberately without a
-curriculum** on the target speed: this is a first attempt to see what the
-robot manages at half speed, before considering a gradual increase
-if needed.
+Cible réduite de moitié — `SPIN_RATE_MAX` 6.0 → **3.0 rad/s** — et
+`spin_stay_in_place` renforcé −1.0 → **−3.0** (voir le tableau des rewards et
+`SPIN_WHEEL_OMEGA_SCALE` recalibré à 17.0 plus haut). **Délibérément sans
+curriculum** sur la vitesse cible : c'est un premier essai pour voir ce que le
+robot parvient à faire à vitesse moitié, avant d'envisager une remontée graduelle
+si besoin.
 
-**Attenuating the drift cost during the launch.** Strengthening
-`spin_stay_in_place` to −3.0 sharpened a flaw raised in review: that
-term was the only one in the spin not modulated by the phase, so it charged full
-price for the transient translation during the launch ramp — precisely
-the moment when the robot must push against the ground to inject angular momentum, and
-when the entry momentum (up to 0.3 m/s) must be **converted** into rotation. The cost
-is now multiplied by `SPIN_LAUNCH_DRIFT_SCALE = 0.2` over `[0, ACCEL_END)`
-and is full price afterwards. It is deliberately **not** switched off during the
-rest segment, unlike the priming terms: that is where stillness is the real criterion.
+**Atténuation du coût de dérive pendant le lancement.** Renforcer
+`spin_stay_in_place` à −3.0 a rendu plus aigu un défaut relevé par la revue : ce
+terme était le seul du spin à ne pas être modulé par la phase, donc il facturait à
+plein tarif la translation transitoire pendant la rampe de lancement — précisément
+le moment où le robot doit pousser au sol pour s'injecter du moment angulaire, et
+où l'élan d'entrée (jusqu'à 0.3 m/s) doit être **converti** en rotation. Le coût
+est désormais multiplié par `SPIN_LAUNCH_DRIFT_SCALE = 0.2` sur `[0, ACCEL_END)`
+et vaut plein tarif ensuite. Il n'est volontairement **pas** éteint pendant le
+repos, contrairement aux amorces : c'est là que l'immobilité est le vrai critère.
 
-Step 4 (watching the gesture) remains to be done, reserved for the human.
+L'étape 4 (regarder le geste) reste à faire, réservée à l'humain.
 
-⚠️ These four tests (three new ones on the attenuation, one modified) were **not**
-run — the machine was reserved for something else at commit time. To be
-run before any long run: `uv run --with pytest pytest tests/test_spin.py
+⚠️ Ces quatre tests (trois nouveaux sur l'atténuation, un modifié) n'ont **pas**
+été exécutés — la machine était réservée à autre chose au moment du commit. À
+lancer avant tout run long : `uv run --with pytest pytest tests/test_spin.py
 tests/test_spin_cfg.py -q`.

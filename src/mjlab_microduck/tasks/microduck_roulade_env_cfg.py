@@ -25,7 +25,7 @@ Design (see the roulade section of mdp.py for the full history):
     tucked, with forward angular momentum, accumulator pre-set to the spawn
     angle. The second half of a roulade IS the face-up recovery problem, which
     we know is learnable.
-  • Momentum hook for later: reset_roulade_state.forward_vel_range gives standing
+  • Élan hook for later: reset_roulade_state.forward_vel_range gives standing
     spawns an initial forward base velocity — set ROULADE_FORWARD_VEL_RANGE
     to e.g. (0.0, 0.3) to train rolls out of a walk. (0, 0) = standstill-only.
 
@@ -75,7 +75,7 @@ EPISODE_LENGTH_S = 5.0
 # Empirically-measured standing trunk height (standup lesson: don't guess).
 STAND_Z = 0.115
 
-# ── Momentum (run-up) hook ───────────────────────────────────────────────────
+# ── Élan (run-up) hook ────────────────────────────────────────────────────────
 # (0, 0) = roll from a standstill (run 1). Widen to e.g. (0.0, 0.3) to train
 # rolls entered with forward momentum — standing spawns then get a random
 # initial forward base velocity, approximating a hand-off from the walking
