@@ -425,7 +425,11 @@ def run(body: Body, headless: bool) -> None:
         try:
             import mujoco.viewer
 
-            viewer = mujoco.viewer.launch_passive(body.model, body.data)
+            # No side panels: this window is for watching a duck, not for driving the simulator
+            # — everything that would be driven from them is the daemon's job here.
+            viewer = mujoco.viewer.launch_passive(
+                body.model, body.data, show_left_ui=False, show_right_ui=False
+            )
         except Exception as error:
             print(f"== no viewer ({error}); running headless")
 
