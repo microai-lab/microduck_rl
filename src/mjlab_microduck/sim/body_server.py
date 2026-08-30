@@ -51,6 +51,14 @@ import numpy as np
 
 PROTOCOL = 1
 
+# What the policies were trained at, and what `scripts/infer_policy.py` sets. See `Body.__init__`.
+TIMESTEP = 0.005
+
+# Where `scripts/infer_policy.py` puts the duck before it starts: trunk 0.125 m up, upright, every
+# joint at the home pose. Not a keyframe — the keyframes are poses, this is a *placement*, and it is
+# the initial condition the policies are known to work from.
+HOME_TRUNK_Z = 0.125
+
 # `duck_ipc_proto::JOINT_NAMES`, which is protocol: every positional array on the wire is indexed by
 # it. Duplicated here rather than derived, because the two repositories cannot share a constant —
 # and asserted against the model at startup, which is the next best thing.
@@ -72,6 +80,14 @@ JOINT_NAMES = (
     "right_ankle",
 )
 MOUTH_INDEX = JOINT_NAMES.index("mouth")
+
+# `duck_control::DEFAULT_POSITION`, and `DEFAULT_POSE` in `scripts/infer_policy.py` with the mouth
+# put back. The right leg is mirrored, not symmetric — worth reading rather than assuming.
+HOME_POSE = (
+    0.0, -0.0873, -0.4579, -0.0049, 0.4530,
+    0.3491, 0.3491, 0.0, 0.0, 0.0,
+    0.0, 0.0873, 0.4579, 0.0049, -0.4530,
+)
 
 SCENES = Path(__file__).resolve().parents[1] / "robot" / "microduck"
 # **`scene.xml`, not `scene_walk.xml`.** The walking scene includes `robot_walk.xml`, the model the
@@ -98,9 +114,14 @@ class Body:
 
     def __init__(self, scene: Path, keyframe: str = "STAND", limp: bool = False, kp: float = 200.0):
         self.model = mujoco.MjModel.from_xml_path(str(scene))
+        # **The scenes ship 0.002 and the policies were trained at 0.005.** `scripts/infer_policy.py`
+        # overrides it the same way, and with its decimation of 4 that is exactly the 50 Hz the
+        # daemon's control loop runs at. It is not a performance knob: the BAM actuator fit, the
+        # contact solref and the joint armature are all tuned at this step, so running at 0.002
+        # gives a duck whose legs reach the right angles and still will not hold it up.
+        self.model.opt.timestep = TIMESTEP
         self.data = mujoco.MjData(self.model)
         self.lock = threading.Lock()
-        self.reset_to(keyframe)
 
         # Model joint order, once, by name — never by index, because an MJCF edit reorders silently.
         self.actuated = [
@@ -139,6 +160,16 @@ class Body:
         # when the process comes up. Starting limp instead means the duck collapses before the first
         # read, and the daemon quite correctly reports a seated boot and tries to stand a robot that
         # is already on the floor. `--limp` is the other case, for when that is what you want.
+        self.reset_to(keyframe)
+
+        # **Held until the daemon takes it.** A biped at a static pose is not stable: holding the
+        # home pose with position control alone puts this duck on the ground in under a second, at
+        # any timestep, from any starting placement — `infer_policy.py` never does it, because it
+        # has the policy balancing from step zero. `robotd` deliberately does not enable torque when
+        # it starts, so there are several seconds between the simulator opening and the policy
+        # taking over, and the duck would spend them falling over. So physics does not advance until
+        # the first `set_torque(true)`, which is a hand steadying the robot until someone enables it.
+        self.released = limp
         self.torque_on = not limp
         self.kp = kp
         self._gain = self.model.actuator_gainprm[:, 0].copy()
@@ -159,6 +190,15 @@ class Body:
         Naming a keyframe the scene does not have is fatal rather than a shrug: the alternative is
         starting somewhere arbitrary and spending an afternoon on the consequences.
         """
+        if keyframe.upper() == "HOME":
+            mujoco.mj_resetData(self.model, self.data)
+            self.data.qpos[0:3] = [0.0, 0.0, HOME_TRUNK_Z]
+            self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+            for model_index, wire_index in enumerate(self.to_wire):
+                self.data.qpos[self.qpos_adr[model_index]] = HOME_POSE[wire_index]
+            mujoco.mj_forward(self.model, self.data)
+            return
+
         available = [
             mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_KEY, i)
             for i in range(self.model.nkey)
@@ -247,6 +287,7 @@ class Body:
         with self.lock:
             self.torque_on = bool(on)
             if on:
+                self.released = True
                 # Torque arriving must not fling the robot at a stale target. The real robot avoids
                 # this by ramping to the home pose after enabling; this makes the first instant
                 # after `set_torque(true)` a hold rather than a lunge.
@@ -268,6 +309,11 @@ class Body:
 
     def step(self) -> None:
         with self.lock:
+            if not self.released:
+                # Steady, not frozen: forward kinematics keeps the sensors and the viewer honest
+                # without integrating, so the daemon sees a robot standing where it was put.
+                mujoco.mj_forward(self.model, self.data)
+                return
             mujoco.mj_step(self.model, self.data)
 
 
@@ -344,8 +390,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--keyframe",
-        default="STAND",
-        help="pose to start in. STAND matches the daemon's home frame; SIT is what a duck "
+        default="HOME",
+        help="where to start. HOME is where infer_policy.py places it — home pose, trunk "
+        "0.125 m, upright — and is the initial condition the policies are known to work from. "
+        "The scene's keyframes (STAND, SIT, FOLD) are also accepted; SIT is what a duck "
         "left folded looks like, and is how to exercise standing up",
     )
     args = parser.parse_args()
