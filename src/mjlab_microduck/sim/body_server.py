@@ -1,12 +1,17 @@
 """A microduck body in MuJoCo, served to the real `robotd` over TCP.
 
-    uv run duck-body                      # one duck, the walking scene, a viewer
+    uv run duck-body                      # one duck, a viewer
+    uv run duck-body --ducks 4            # four, sharing one world and one window
     uv run duck-body --port 7801
     uv run duck-body --headless           # no window, for tests and for many ducks
 
 Then, on the daemon side:
 
     robotd --sim 127.0.0.1:7801
+
+One duck per TCP port, from `--port` upwards, and one `mj_step` for all of them — so ducks share
+a floor and can bump into each other, which is the difference between a room with four robots in
+it and four robots on the same screen.
 
 Everything above `duck_control::io::RobotIo` is the code that runs on a real robot — the 50 Hz loop,
 the ONNX policies, safety, fall detection, odometry, kinematics, every IPC call. This process is the
@@ -34,12 +39,10 @@ own shape lives is the whole reason the protocol carries the robot's units rathe
 gives an orientation quaternion, so this does the rotation — the same arithmetic the IMU's SFLP
 filter does on the robot, on the other side of the same wire.
 """
-
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import socket
 import socketserver
 import threading
@@ -51,38 +54,29 @@ import numpy as np
 
 PROTOCOL = 1
 
-# What the policies were trained at, and what `scripts/infer_policy.py` sets. See `Body.__init__`.
+# What the policies were trained at, and what `scripts/infer_policy.py` sets. The scenes ship 0.002;
+# with that script's decimation of 4 this is exactly the 50 Hz the daemon's control loop runs at.
+# Not a performance knob: the BAM actuator fit, the contact solref and the joint armature are all
+# tuned at this step, so 0.002 gives a duck whose legs reach the right angles and still cannot hold
+# itself up.
 TIMESTEP = 0.005
 
-# Where `scripts/infer_policy.py` puts the duck before it starts: trunk 0.125 m up, upright, every
-# joint at the home pose. Not a keyframe — the keyframes are poses, this is a *placement*, and it is
-# the initial condition the policies are known to work from.
+# Where `scripts/infer_policy.py` puts a duck before it starts: trunk this high, upright, every joint
+# at the home pose. Not a keyframe — the keyframes are poses and this is a *placement*.
 HOME_TRUNK_Z = 0.125
 
 # `duck_ipc_proto::JOINT_NAMES`, which is protocol: every positional array on the wire is indexed by
-# it. Duplicated here rather than derived, because the two repositories cannot share a constant —
-# and asserted against the model at startup, which is the next best thing.
+# it. Duplicated here rather than shared, because the two repositories cannot share a constant — and
+# checked against the model at startup, which is the next best thing.
 JOINT_NAMES = (
-    "left_hip_yaw",
-    "left_hip_roll",
-    "left_hip_pitch",
-    "left_knee",
-    "left_ankle",
-    "neck_pitch",
-    "head_pitch",
-    "head_yaw",
-    "head_roll",
-    "mouth",
-    "right_hip_yaw",
-    "right_hip_roll",
-    "right_hip_pitch",
-    "right_knee",
-    "right_ankle",
+    "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee", "left_ankle",
+    "neck_pitch", "head_pitch", "head_yaw", "head_roll", "mouth",
+    "right_hip_yaw", "right_hip_roll", "right_hip_pitch", "right_knee", "right_ankle",
 )
 MOUTH_INDEX = JOINT_NAMES.index("mouth")
 
-# `duck_control::DEFAULT_POSITION`, and `DEFAULT_POSE` in `scripts/infer_policy.py` with the mouth
-# put back. The right leg is mirrored, not symmetric — worth reading rather than assuming.
+# `duck_control::DEFAULT_POSITION`, and `DEFAULT_POSE` in `infer_policy.py` with the mouth put back.
+# The right leg is mirrored, not symmetric — worth reading rather than assuming.
 HOME_POSE = (
     0.0, -0.0873, -0.4579, -0.0049, 0.4530,
     0.3491, 0.3491, 0.0, 0.0, 0.0,
@@ -90,261 +84,291 @@ HOME_POSE = (
 )
 
 SCENES = Path(__file__).resolve().parents[1] / "robot" / "microduck"
-# **`scene.xml`, not `scene_walk.xml`.** The walking scene includes `robot_walk.xml`, the model the
-# RL work trains against — and its actuator default classes carry `contype="0" conaffinity="0"`, so
-# the robot's geoms collide with nothing. Started there, the duck sinks straight through a floor that
-# is present in the scene and does nothing: trunk z went 0.120 → -0.105 in one second, and the daemon
-# read it, quite correctly, as a robot lying on its back. `scene.xml` includes
-# `robot_allcollisions.xml`, which is the one with a body that touches things.
+# `scene.xml`, not `scene_walk.xml`: the walking scene includes the model the RL work trains
+# against, whose actuator default classes carry `contype="0" conaffinity="0"`, so the robot collides
+# with nothing and sinks through a floor the scene really does contain.
 DEFAULT_SCENE = SCENES / "scene.xml"
+# The robot with no floor and no scenery — what extra ducks are attached from.
+ROBOT_ONLY = SCENES / "robot_allcollisions.xml"
 
-# What the robot reports and nothing here simulates. Stated as constants rather than omitted, so
+# Far enough apart not to touch at rest, close enough to be in one screenful.
+SPACING = 0.5
+
+# What the robot reports and nothing here simulates. Constants rather than omissions, so
 # `robotctl health` shows a plausible robot instead of an alarming one.
 NOMINAL_VOLTS = 7.4
 NOMINAL_TEMP_C = 32.0
 
 
-class Body:
-    """The simulated robot: physics on one thread, the socket on another.
+def duck_prefix(index: int) -> str:
+    """`""` for the first duck — it is the scene's own — and `d1_`, `d2_` … for attached ones."""
+    return "" if index == 0 else f"d{index}_"
 
-    The lock is held only to copy numbers in or out, never across a physics step — a daemon that
-    asks for sensors must never be waiting on the solver, for the same reason a real bus read does
-    not wait for a servo's control loop.
+
+def build_world(scene: Path, count: int) -> mujoco.MjModel:
+    """One model holding `count` ducks, so they share a floor and can bump into each other.
+
+    The scene already contains one duck; the rest are attached to it under a name prefix, which is
+    what `MjSpec` is for. Sharing a world rather than running N simulators is the whole point: two
+    ducks in separate physics can be beside each other on a screen and never touch, and "beside each
+    other" is what every social behaviour is about.
+    """
+    if count == 1:
+        return mujoco.MjModel.from_xml_path(str(scene))
+
+    spec = mujoco.MjSpec.from_file(str(scene))
+    for index in range(1, count):
+        # A fresh child every time: `attach` renames the spec it is given, so reusing one gives the
+        # third duck names like `d2_d1_left_hip_yaw` and a compile error about incompatible ids.
+        robot = mujoco.MjSpec.from_file(str(ROBOT_ONLY))
+        frame = spec.worldbody.add_frame(pos=[0.0, index * SPACING, 0.0])
+        spec.attach(robot, prefix=duck_prefix(index), frame=frame)
+    return spec.compile()
+
+
+def pose_table(scene: Path, keyframe: str) -> tuple[dict[str, float] | None, float]:
+    """A named pose from the scene's keyframes, as joint name → angle.
+
+    Read from a single-duck model and applied by name, because attaching a robot does not bring the
+    scene's keyframes with it — and a pose is a fact about the robot, not about how many of them are
+    in the room.
+    """
+    if keyframe.upper() == "HOME":
+        return None, HOME_TRUNK_Z
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(model.nkey)]
+    if keyframe not in names:
+        raise SystemExit(
+            f"no keyframe {keyframe!r} in {scene.name}. It has: {', '.join(n for n in names if n)}"
+        )
+    qpos = model.key_qpos[names.index(keyframe)]
+    table = {}
+    for joint in range(model.njnt):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint)
+        if name in JOINT_NAMES:
+            table[name] = float(qpos[model.jnt_qposadr[joint]])
+    # The keyframe's own trunk height, not the home one: a seated duck placed at standing height is
+    # a duck hovering above the floor, which drops the moment anybody enables it.
+    return table, float(qpos[2])
+
+
+def gravity_in_trunk(quat: np.ndarray) -> np.ndarray:
+    """World gravity in the trunk frame. Upright is `[0, 0, -1]`.
+
+    What the policy actually observes, and it is here rather than in the daemon because the daemon's
+    IMU delivers exactly this, already rotated, from the sensor's own filter.
+    """
+    rotation = np.zeros(9)
+    mujoco.mju_quat2Mat(rotation, quat)
+    return -rotation.reshape(3, 3).T[:, 2]
+
+
+class World:
+    """The physics, shared by every duck in it.
+
+    One `mj_step` advances all of them, which is what makes a shove real rather than decorative. The
+    lock is held only to copy numbers in or out, never across a step: a daemon asking for sensors
+    must not wait on the solver, for the same reason a real bus read does not wait on a servo.
     """
 
-    def __init__(self, scene: Path, keyframe: str = "STAND", limp: bool = False, kp: float = 200.0):
-        self.model = mujoco.MjModel.from_xml_path(str(scene))
-        # **The scenes ship 0.002 and the policies were trained at 0.005.** `scripts/infer_policy.py`
-        # overrides it the same way, and with its decimation of 4 that is exactly the 50 Hz the
-        # daemon's control loop runs at. It is not a performance knob: the BAM actuator fit, the
-        # contact solref and the joint armature are all tuned at this step, so running at 0.002
-        # gives a duck whose legs reach the right angles and still will not hold it up.
+    def __init__(self, scene: Path, count: int = 1):
+        self.model = build_world(scene, count)
         self.model.opt.timestep = TIMESTEP
         self.data = mujoco.MjData(self.model)
         self.lock = threading.Lock()
+        self.bodies: list[Body] = []
 
-        # Model joint order, once, by name — never by index, because an MJCF edit reorders silently.
-        self.actuated = [
-            mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
-            for i in range(self.model.nu)
-        ]
-        missing = [n for n in self.actuated if n not in JOINT_NAMES]
-        if missing:
-            raise SystemExit(
-                f"{scene.name} actuates joints the daemon does not know: {missing}.\n"
-                "  The wire is positional and indexed by JOINT_NAMES, so a name only this side "
-                "knows about cannot be sent anywhere."
-            )
-        self.to_wire = [JOINT_NAMES.index(n) for n in self.actuated]
+    def step(self) -> None:
+        with self.lock:
+            mujoco.mj_step(self.model, self.data)
+            # A duck nobody has enabled yet is put back where it was. Physics is shared, so it
+            # cannot simply not be stepped — and a hand steadying one robot while another walks
+            # about is an ordinary thing for a room to contain.
+            for body in self.bodies:
+                if not body.released:
+                    body.restore()
+
+
+class Body:
+    """One duck's view of the world: its joints, its actuators, its trunk."""
+
+    def __init__(self, world: World, index: int, limp: bool = False, kp: float = 200.0):
+        self.world = world
+        self.index = index
+        self.prefix = duck_prefix(index)
+        model = world.model
+
+        def ident(kind, name):
+            found = mujoco.mj_name2id(model, kind, self.prefix + name)
+            if found < 0:
+                raise SystemExit(f"the model has no {name!r} for duck {index}")
+            return found
+
+        # By name, never by index: an MJCF edit reorders silently.
+        self.actuators = []
+        self.to_wire = []
+        for wire_index, name in enumerate(JOINT_NAMES):
+            found = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, self.prefix + name)
+            if found >= 0:
+                self.actuators.append(found)
+                self.to_wire.append(wire_index)
+        if not self.actuators:
+            raise SystemExit(f"no actuated joints for duck {index} (prefix {self.prefix!r})")
 
         self.qpos_adr = np.array(
-            [
-                self.model.jnt_qposadr[
-                    mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, n)
-                ]
-                for n in self.actuated
-            ]
+            [model.jnt_qposadr[model.actuator_trnid[a, 0]] for a in self.actuators]
         )
         self.qvel_adr = np.array(
-            [
-                self.model.jnt_dofadr[
-                    mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, n)
-                ]
-                for n in self.actuated
-            ]
+            [model.jnt_dofadr[model.actuator_trnid[a, 0]] for a in self.actuators]
         )
+        self.trunk = int(model.jnt_qposadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")])
+        self.trunk_dof = int(model.jnt_dofadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")])
 
-        # **Torque on, holding the pose it started in** — because that is what a daemon finds.
-        # `robotd` deliberately never enables torque at startup: "a robotd restarted by an update
-        # must leave a standing robot standing", and on a real robot the servos are already holding
-        # when the process comes up. Starting limp instead means the duck collapses before the first
-        # read, and the daemon quite correctly reports a seated boot and tries to stand a robot that
-        # is already on the floor. `--limp` is the other case, for when that is what you want.
-        self.reset_to(keyframe)
+        self.actuator_slice = np.array(self.actuators)
+        self._gain = model.actuator_gainprm[self.actuator_slice, 0].copy()
 
         # **Held until the daemon takes it.** A biped at a static pose is not stable: holding the
         # home pose with position control alone puts this duck on the ground in under a second, at
-        # any timestep, from any starting placement — `infer_policy.py` never does it, because it
-        # has the policy balancing from step zero. `robotd` deliberately does not enable torque when
-        # it starts, so there are several seconds between the simulator opening and the policy
-        # taking over, and the duck would spend them falling over. So physics does not advance until
-        # the first `set_torque(true)`, which is a hand steadying the robot until someone enables it.
+        # any timestep, from any placement — `infer_policy.py` never does it, because it has the
+        # policy balancing from step zero. `robotd` deliberately does not enable torque when it
+        # starts, so the seconds before it would be spent falling over.
         self.released = limp
         self.torque_on = not limp
         self.kp = kp
-        self._gain = self.model.actuator_gainprm[:, 0].copy()
-        self.data.ctrl[:] = self.data.qpos[self.qpos_adr]
+        self.held = None
+
+    # ── placement ─────────────────────────────────────────────────────────
+
+    def place(self, pose: dict[str, float] | None, trunk_z: float, offset_y: float) -> None:
+        data = self.world.data
+        data.qpos[self.trunk + 0] = 0.0
+        data.qpos[self.trunk + 1] = offset_y
+        data.qpos[self.trunk + 2] = trunk_z
+        data.qpos[self.trunk + 3 : self.trunk + 7] = [1.0, 0.0, 0.0, 0.0]
+        data.qvel[self.trunk_dof : self.trunk_dof + 6] = 0.0
+        for slot, wire_index in enumerate(self.to_wire):
+            name = JOINT_NAMES[wire_index]
+            value = HOME_POSE[wire_index] if pose is None else pose.get(name, HOME_POSE[wire_index])
+            data.qpos[self.qpos_adr[slot]] = value
+            data.qvel[self.qvel_adr[slot]] = 0.0
+        data.ctrl[self.actuator_slice] = data.qpos[self.qpos_adr]
         self._apply_torque()
-        mujoco.mj_forward(self.model, self.data)
+        self.remember()
 
-    def reset_to(self, keyframe: str) -> None:
-        """Start in a pose the daemon recognises.
-
-        **`qpos0` is every joint at zero, which is not a pose this robot is ever in.** Started
-        there, `robotd` measured 0.41 rad of deviation from its home frame, correctly called it a
-        seated boot, tried to rise with the sitstand policy and ended on its back — a completely
-        reasonable response to a robot found folded in a way no robot folds. The scene carries the
-        real poses as keyframes; `STAND` is the one that matches `duck_control::DEFAULT_POSITION`,
-        which its own comment says must match `HOME_FRAME` in the training env.
-
-        Naming a keyframe the scene does not have is fatal rather than a shrug: the alternative is
-        starting somewhere arbitrary and spending an afternoon on the consequences.
-        """
-        if keyframe.upper() == "HOME":
-            mujoco.mj_resetData(self.model, self.data)
-            self.data.qpos[0:3] = [0.0, 0.0, HOME_TRUNK_Z]
-            self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
-            for model_index, wire_index in enumerate(self.to_wire):
-                self.data.qpos[self.qpos_adr[model_index]] = HOME_POSE[wire_index]
-            mujoco.mj_forward(self.model, self.data)
-            return
-
-        available = [
-            mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_KEY, i)
-            for i in range(self.model.nkey)
-        ]
-        if keyframe in available:
-            mujoco.mj_resetDataKeyframe(self.model, self.data, available.index(keyframe))
-            return
-        if not available:
-            mujoco.mj_resetData(self.model, self.data)
-            print("== this scene has no keyframes; starting at qpos0, which is not a real pose")
-            return
-        raise SystemExit(
-            f"no keyframe {keyframe!r} in this scene. It has: {', '.join(available)}"
+    def remember(self) -> None:
+        data = self.world.data
+        self.held = (
+            data.qpos[self.trunk : self.trunk + 7].copy(),
+            data.qpos[self.qpos_adr].copy(),
         )
+
+    def restore(self) -> None:
+        """Put this duck back where it was, for the one that has not been enabled yet."""
+        if self.held is None:
+            return
+        trunk, joints = self.held
+        data = self.world.data
+        data.qpos[self.trunk : self.trunk + 7] = trunk
+        data.qpos[self.qpos_adr] = joints
+        data.qvel[self.trunk_dof : self.trunk_dof + 6] = 0.0
+        data.qvel[self.qvel_adr] = 0.0
 
     # ── what the daemon sees ──────────────────────────────────────────────
 
     def sensors(self) -> dict:
-        with self.lock:
-            sim_time = float(self.data.time)
-            positions = self.data.qpos[self.qpos_adr].copy()
-            velocities = self.data.qvel[self.qvel_adr].copy()
-            force = self.data.actuator_force.copy()
-            quat = self.data.qpos[3:7].copy()  # the free joint's orientation, scalar-first
-            trunk_z = float(self.data.qpos[2])
+        data = self.world.data
+        with self.world.lock:
+            sim_time = float(data.time)
+            positions = data.qpos[self.qpos_adr].copy()
+            velocities = data.qvel[self.qvel_adr].copy()
+            force = data.actuator_force[self.actuator_slice].copy()
+            quat = data.qpos[self.trunk + 3 : self.trunk + 7].copy()
+            gyro = data.qvel[self.trunk_dof + 3 : self.trunk_dof + 6].copy()
+            trunk_z = float(data.qpos[self.trunk + 2])
 
         wire_pos = [0.0] * len(JOINT_NAMES)
         wire_vel = [0.0] * len(JOINT_NAMES)
         wire_cur = [0.0] * len(JOINT_NAMES)
-        for model_index, wire_index in enumerate(self.to_wire):
-            wire_pos[wire_index] = float(positions[model_index])
-            wire_vel[wire_index] = float(velocities[model_index])
+        for slot, wire_index in enumerate(self.to_wire):
+            wire_pos[wire_index] = float(positions[slot])
+            wire_vel[wire_index] = float(velocities[slot])
             # Not calibrated against a real servo: a stand-in with the right shape, so a consumer
             # watching load sees load. Amps from a simulated torque would be a fiction with a unit.
-            wire_cur[wire_index] = abs(float(force[model_index])) * 100.0
+            wire_cur[wire_index] = abs(float(force[slot])) * 100.0
 
         return {
             "positions": wire_pos,
             "velocities": wire_vel,
             "currents_ma": wire_cur,
             # **Not part of the protocol, and deliberately extra.** No robot can measure how high its
-            # own trunk is, so nothing above `RobotIo` may use this — serde ignores it on the daemon
-            # side. It is here because a tool asking "did it stand up?" has no other way to know:
-            # a duck sitting on its bottom with a vertical trunk has gravity [0, 0, -1] too, which
-            # is exactly how a check on orientation alone reported a seated duck as upright.
+            # own trunk is, and serde ignores these on the daemon side. They are here because a tool
+            # asking "did it stand up?" has no other way to know — a duck sitting on its bottom with
+            # a vertical trunk has gravity [0, 0, -1] too — and because a simulator whose seconds are
+            # not seconds ruins a policy silently.
             "trunk_z": trunk_z,
-            # Also outside the protocol, and for the same reason: the daemon's loop is wall-clock,
-            # so the one thing that silently ruins a policy is a simulator whose seconds are not
-            # seconds. Comparing this against a wall clock is the only way to catch it — the
-            # "behind real time" warning resets its own reference, so it cannot see slow drift.
             "sim_time": sim_time,
             "imu": {
-                "gyro": [float(v) for v in self._gyro()],
+                "gyro": [float(v) for v in gyro],
                 "gravity": [float(v) for v in gravity_in_trunk(quat)],
                 "quat": [float(v) for v in quat],
             },
         }
 
-    def _gyro(self) -> np.ndarray:
-        # Body-frame angular velocity: the free joint's rotational DOFs, which MuJoCo already
-        # expresses in the body frame.
-        with self.lock:
-            return self.data.qvel[3:6].copy()
-
     def slow_sensors(self) -> dict:
-        return {
-            "volts": NOMINAL_VOLTS,
-            "temps_c": [NOMINAL_TEMP_C] * len(JOINT_NAMES),
-        }
+        return {"volts": NOMINAL_VOLTS, "temps_c": [NOMINAL_TEMP_C] * len(JOINT_NAMES)}
 
     # ── what the daemon commands ──────────────────────────────────────────
 
     def set_targets(self, wire_targets: list[float]) -> None:
         if len(wire_targets) != len(JOINT_NAMES):
             raise ValueError(f"expected {len(JOINT_NAMES)} targets, got {len(wire_targets)}")
-        with self.lock:
-            for model_index, wire_index in enumerate(self.to_wire):
-                self.data.ctrl[model_index] = wire_targets[wire_index]
+        with self.world.lock:
+            for slot, wire_index in enumerate(self.to_wire):
+                self.world.data.ctrl[self.actuators[slot]] = wire_targets[wire_index]
 
     def set_gain(self, kp: int) -> None:
-        with self.lock:
+        with self.world.lock:
             self.kp = float(kp)
             self._apply_torque()
 
     def set_torque(self, on: bool) -> None:
-        with self.lock:
+        with self.world.lock:
             self.torque_on = bool(on)
             if on:
                 self.released = True
-                # Torque arriving must not fling the robot at a stale target. The real robot avoids
-                # this by ramping to the home pose after enabling; this makes the first instant
-                # after `set_torque(true)` a hold rather than a lunge.
-                self.data.ctrl[:] = self.data.qpos[self.qpos_adr]
+                # Torque arriving must not fling the robot at a stale target.
+                self.world.data.ctrl[self.actuator_slice] = self.world.data.qpos[self.qpos_adr]
             self._apply_torque()
 
     def _apply_torque(self) -> None:
         """Torque off means limp, not frozen.
 
         Refusing to command a fallen robot only freezes it in the pose it fell in — which is why
-        `RobotIo::set_gain` exists at all. Zero gain here is the simulated equivalent of cutting
-        power to the servos.
+        `RobotIo::set_gain` exists at all. Zero gain is the simulated equivalent of cutting power.
+        The daemon's kp is a Dynamixel register value whose 200 is what BAM fitted the model's own
+        gain to, so it is a ratio against 200 rather than a number in the same units.
         """
         scale = (self.kp / 200.0) if self.torque_on else 0.0
-        self.model.actuator_gainprm[:, 0] = self._gain * scale
-        self.model.actuator_biasprm[:, 1] = -self._gain * scale
-
-    # ── physics ───────────────────────────────────────────────────────────
-
-    def step(self) -> None:
-        with self.lock:
-            if not self.released:
-                # Steady, not frozen: forward kinematics keeps the sensors and the viewer honest
-                # without integrating, so the daemon sees a robot standing where it was put.
-                mujoco.mj_forward(self.model, self.data)
-                return
-            mujoco.mj_step(self.model, self.data)
-
-
-def gravity_in_trunk(quat: np.ndarray) -> np.ndarray:
-    """World gravity, expressed in the trunk frame. Upright is `[0, 0, -1]`.
-
-    What the policy actually observes — and the reason this is here rather than in the daemon is
-    that the daemon's IMU delivers exactly this, already rotated, from the sensor's own filter.
-    """
-    rotation = np.zeros(9)
-    mujoco.mju_quat2Mat(rotation, quat)
-    # The world→body rotation is the transpose; gravity is -z in the world.
-    return -rotation.reshape(3, 3).T[:, 2]
+        model = self.world.model
+        model.actuator_gainprm[self.actuator_slice, 0] = self._gain * scale
+        model.actuator_biasprm[self.actuator_slice, 1] = -self._gain * scale
 
 
 class Handler(socketserver.StreamRequestHandler):
     """One duck's daemon. One connection at a time, which is the real relationship too."""
 
-    def handle(self) -> None:  # noqa: D102
+    def handle(self) -> None:
         self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        body: Body = self.server.body  # type: ignore[attr-defined]
-        print(f"== daemon connected from {self.client_address}")
+        body: Body = self.server.body
+        print(f"== duck {body.index}: daemon connected from {self.client_address}", flush=True)
         for raw in self.rfile:
             try:
-                request = json.loads(raw)
-                answer = self.dispatch(body, request)
+                answer = self.dispatch(body, json.loads(raw))
             except Exception as error:  # a bad frame must not take the simulator down with it
                 answer = {"error": str(error)}
             self.wfile.write((json.dumps(answer) + "\n").encode())
             self.wfile.flush()
-        print("== daemon disconnected")
+        print(f"== duck {body.index}: daemon disconnected", flush=True)
 
     def dispatch(self, body: Body, request: dict) -> dict:
         op = request.get("op")
@@ -376,44 +400,7 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--scene", type=Path, default=DEFAULT_SCENE)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=7801)
-    parser.add_argument("--headless", action="store_true", help="no viewer window")
-    parser.add_argument(
-        "--limp",
-        action="store_true",
-        help="start with no torque, so the duck collapses where it stands — a robot found on the "
-        "floor, which is what `robotd`'s seated-boot path is for",
-    )
-    parser.add_argument(
-        "--keyframe",
-        default="HOME",
-        help="where to start. HOME is where infer_policy.py places it — home pose, trunk "
-        "0.125 m, upright — and is the initial condition the policies are known to work from. "
-        "The scene's keyframes (STAND, SIT, FOLD) are also accepted; SIT is what a duck "
-        "left folded looks like, and is how to exercise standing up",
-    )
-    args = parser.parse_args()
-
-    if not args.scene.exists():
-        raise SystemExit(f"no scene at {args.scene}. Available:\n  " + "\n  ".join(
-            sorted(p.name for p in SCENES.glob("scene*.xml"))
-        ))
-
-    body = Body(args.scene, keyframe=args.keyframe, limp=args.limp)
-    server = Server((args.host, args.port), Handler)
-    server.body = body  # type: ignore[attr-defined]
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"== {args.scene.name}: {len(body.actuated)} actuated joints, starting at {args.keyframe}")
-    print(f"== serving a body on {args.host}:{args.port} — robotd --sim {args.host}:{args.port}")
-
-    run(body, headless=args.headless)
-
-
-def run(body: Body, headless: bool) -> None:
+def run(world: World, headless: bool) -> None:
     """Step in real time.
 
     **Real time, not as fast as possible.** The daemon's loop is wall-clock and its health gate
@@ -425,40 +412,38 @@ def run(body: Body, headless: bool) -> None:
         try:
             import mujoco.viewer
 
-            # No side panels: this window is for watching a duck, not for driving the simulator
-            # — everything that would be driven from them is the daemon's job here.
+            # No side panels: this window is for watching ducks, and everything the panels would
+            # drive belongs to the daemons.
             viewer = mujoco.viewer.launch_passive(
-                body.model, body.data, show_left_ui=False, show_right_ui=False
+                world.model, world.data, show_left_ui=False, show_right_ui=False
             )
         except Exception as error:
-            print(f"== no viewer ({error}); running headless")
+            print(f"== no viewer ({error}); running headless", flush=True)
 
-    dt = body.model.opt.timestep
+    dt = world.model.opt.timestep
     # A frame every N steps, counted — not `data.time % 0.033`, which is float arithmetic on an
-    # accumulating value and fires when it feels like it. A viewer that renders the first frame and
-    # then rarely again is a window showing a pose the robot left seconds ago.
+    # accumulating value and fires when it feels like it.
     steps_per_frame = max(1, round((1.0 / 60.0) / dt))
     step = 0
     next_step = time.perf_counter()
     behind = 0
     try:
         while True:
-            body.step()
+            world.step()
             if viewer is not None and not viewer.is_running():
                 break
             next_step += dt
             slack = next_step - time.perf_counter()
-            # Only sleep when there is something worth sleeping for. `time.sleep` on a 2 ms budget
-            # overshoots by more than the budget, so sleeping every step made the simulator's
-            # seconds longer than real ones — invisibly, because the lateness warning resets its own
-            # reference each time it fires.
-            if slack > 0.002:
+            # Only sleep when there is something worth sleeping for: `time.sleep` on a 5 ms budget
+            # overshoots, so sleeping every step makes the simulator's seconds longer than real ones.
+            if slack > dt:
                 time.sleep(slack)
             elif slack < -0.25:
-                # Said once per lapse rather than per step: a simulator that cannot keep real time
-                # is the one thing that breaks the daemon's health gate, and it should say so.
                 behind += 1
-                print(f"== behind real time by {-slack:.2f}s (x{behind}) — fewer ducks, or --headless")
+                print(
+                    f"== behind real time by {-slack:.2f}s (x{behind}) — fewer ducks, or --headless",
+                    flush=True,
+                )
                 next_step = time.perf_counter()
             step += 1
             if viewer is not None and step % steps_per_frame == 0:
@@ -468,6 +453,56 @@ def run(body: Body, headless: bool) -> None:
     finally:
         if viewer is not None:
             viewer.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
+    parser.add_argument("--scene", type=Path, default=DEFAULT_SCENE)
+    parser.add_argument("--ducks", type=int, default=1, help="how many, sharing one world")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=7801, help="the first duck's port; +1 each")
+    parser.add_argument("--headless", action="store_true", help="no viewer window")
+    parser.add_argument(
+        "--limp",
+        action="store_true",
+        help="start with no torque, so a duck collapses where it stands — a robot found on the "
+        "floor, which is what `robotd`'s seated-boot path is for",
+    )
+    parser.add_argument(
+        "--keyframe",
+        default="SIT",
+        help="where to start. SIT is a duck folded on the floor, which is stable while it waits and "
+        "which the standing policy rises from on its own. HOME is infer_policy.py's placement — "
+        "home pose, trunk 0.125 m, upright — and STAND and FOLD are the scene's other poses",
+    )
+    args = parser.parse_args()
+
+    if not args.scene.exists():
+        raise SystemExit(
+            f"no scene at {args.scene}. Available:\n  "
+            + "\n  ".join(sorted(p.name for p in SCENES.glob("scene*.xml")))
+        )
+    if args.ducks < 1:
+        raise SystemExit("--ducks needs at least one duck")
+
+    world = World(args.scene, args.ducks)
+    pose, trunk_z = pose_table(args.scene, args.keyframe)
+    servers = []
+    for index in range(args.ducks):
+        body = Body(world, index, limp=args.limp)
+        body.place(pose, trunk_z, offset_y=index * SPACING)
+        world.bodies.append(body)
+        server = Server((args.host, args.port + index), Handler)
+        server.body = body
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+
+    mujoco.mj_forward(world.model, world.data)
+    print(f"== {args.scene.name}: {args.ducks} duck(s), starting at {args.keyframe}", flush=True)
+    for index in range(args.ducks):
+        print(f"==   duck {index}: robotd --sim {args.host}:{args.port + index}", flush=True)
+
+    run(world, headless=args.headless)
 
 
 if __name__ == "__main__":
