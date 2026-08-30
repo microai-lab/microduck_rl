@@ -293,7 +293,8 @@ class Body:
             force = data.actuator_force[self.actuator_slice].copy()
             quat = data.qpos[self.trunk + 3 : self.trunk + 7].copy()
             gyro = data.qvel[self.trunk_dof + 3 : self.trunk_dof + 6].copy()
-            trunk_z = float(data.qpos[self.trunk + 2])
+            trunk = [float(v) for v in data.qpos[self.trunk : self.trunk + 3]]
+            trunk_z = trunk[2]
 
         wire_pos = [0.0] * len(JOINT_NAMES)
         wire_vel = [0.0] * len(JOINT_NAMES)
@@ -315,6 +316,10 @@ class Body:
             # a vertical trunk has gravity [0, 0, -1] too — and because a simulator whose seconds are
             # not seconds ruins a policy silently.
             "trunk_z": trunk_z,
+            # Where this duck is in the room. No robot knows that either — it is here so a simulated
+            # radio can decide who is close enough to hear whom, which is the one thing a real BLE
+            # advertisement gets for free and a faked one has to be told.
+            "trunk": trunk,
             "sim_time": sim_time,
             "imu": {
                 "gyro": [float(v) for v in gyro],
