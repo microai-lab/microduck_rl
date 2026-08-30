@@ -178,6 +178,7 @@ class Body:
 
     def sensors(self) -> dict:
         with self.lock:
+            sim_time = float(self.data.time)
             positions = self.data.qpos[self.qpos_adr].copy()
             velocities = self.data.qvel[self.qvel_adr].copy()
             force = self.data.actuator_force.copy()
@@ -204,6 +205,11 @@ class Body:
             # a duck sitting on its bottom with a vertical trunk has gravity [0, 0, -1] too, which
             # is exactly how a check on orientation alone reported a seated duck as upright.
             "trunk_z": trunk_z,
+            # Also outside the protocol, and for the same reason: the daemon's loop is wall-clock,
+            # so the one thing that silently ruins a policy is a simulator whose seconds are not
+            # seconds. Comparing this against a wall clock is the only way to catch it — the
+            # "behind real time" warning resets its own reference, so it cannot see slow drift.
+            "sim_time": sim_time,
             "imu": {
                 "gyro": [float(v) for v in self._gyro()],
                 "gravity": [float(v) for v in gravity_in_trunk(quat)],
@@ -390,7 +396,11 @@ def run(body: Body, headless: bool) -> None:
                 break
             next_step += dt
             slack = next_step - time.perf_counter()
-            if slack > 0:
+            # Only sleep when there is something worth sleeping for. `time.sleep` on a 2 ms budget
+            # overshoots by more than the budget, so sleeping every step made the simulator's
+            # seconds longer than real ones — invisibly, because the lateness warning resets its own
+            # reference each time it fires.
+            if slack > 0.002:
                 time.sleep(slack)
             elif slack < -0.25:
                 # Said once per lapse rather than per step: a simulator that cannot keep real time
