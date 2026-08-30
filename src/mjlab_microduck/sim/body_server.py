@@ -182,6 +182,7 @@ class Body:
             velocities = self.data.qvel[self.qvel_adr].copy()
             force = self.data.actuator_force.copy()
             quat = self.data.qpos[3:7].copy()  # the free joint's orientation, scalar-first
+            trunk_z = float(self.data.qpos[2])
 
         wire_pos = [0.0] * len(JOINT_NAMES)
         wire_vel = [0.0] * len(JOINT_NAMES)
@@ -197,6 +198,12 @@ class Body:
             "positions": wire_pos,
             "velocities": wire_vel,
             "currents_ma": wire_cur,
+            # **Not part of the protocol, and deliberately extra.** No robot can measure how high its
+            # own trunk is, so nothing above `RobotIo` may use this — serde ignores it on the daemon
+            # side. It is here because a tool asking "did it stand up?" has no other way to know:
+            # a duck sitting on its bottom with a vertical trunk has gravity [0, 0, -1] too, which
+            # is exactly how a check on orientation alone reported a seated duck as upright.
+            "trunk_z": trunk_z,
             "imu": {
                 "gyro": [float(v) for v in self._gyro()],
                 "gravity": [float(v) for v in gravity_in_trunk(quat)],
@@ -369,6 +376,11 @@ def run(body: Body, headless: bool) -> None:
             print(f"== no viewer ({error}); running headless")
 
     dt = body.model.opt.timestep
+    # A frame every N steps, counted — not `data.time % 0.033`, which is float arithmetic on an
+    # accumulating value and fires when it feels like it. A viewer that renders the first frame and
+    # then rarely again is a window showing a pose the robot left seconds ago.
+    steps_per_frame = max(1, round((1.0 / 60.0) / dt))
+    step = 0
     next_step = time.perf_counter()
     behind = 0
     try:
@@ -386,7 +398,8 @@ def run(body: Body, headless: bool) -> None:
                 behind += 1
                 print(f"== behind real time by {-slack:.2f}s (x{behind}) — fewer ducks, or --headless")
                 next_step = time.perf_counter()
-            if viewer is not None and body.data.time % 0.033 < dt:
+            step += 1
+            if viewer is not None and step % steps_per_frame == 0:
                 viewer.sync()
     except KeyboardInterrupt:
         pass
