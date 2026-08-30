@@ -178,15 +178,24 @@ class World:
         self.lock = threading.Lock()
         self.bodies: list[Body] = []
 
-    def step(self) -> None:
+    def step(self, times: int = 1) -> None:
+        """Advance the world, taking the lock once for the whole batch.
+
+        **Batched because the lock is the bottleneck, not the solver.** Four daemons at 50 Hz make
+        400 requests a second, each of which wants this lock, and Python hands the GIL around
+        between every one of them — so a physics loop taking and releasing it 200 times a second
+        loses. Four steps at 5 ms is 20 ms of world, which is exactly one control tick, so nothing
+        sees a sensor older than the tick it belongs to.
+        """
         with self.lock:
-            mujoco.mj_step(self.model, self.data)
-            # A duck nobody has enabled yet is put back where it was. Physics is shared, so it
-            # cannot simply not be stepped — and a hand steadying one robot while another walks
-            # about is an ordinary thing for a room to contain.
-            for body in self.bodies:
-                if not body.released:
-                    body.restore()
+            for _ in range(times):
+                mujoco.mj_step(self.model, self.data)
+                # A duck nobody has enabled yet is put back where it was. Physics is shared, so
+                # it cannot simply not be stepped — and a hand steadying one robot while another
+                # walks about is an ordinary thing for a room to contain.
+                for body in self.bodies:
+                    if not body.released:
+                        body.restore()
 
 
 class Body:
@@ -421,22 +430,27 @@ def run(world: World, headless: bool) -> None:
             print(f"== no viewer ({error}); running headless", flush=True)
 
     dt = world.model.opt.timestep
-    # A frame every N steps, counted — not `data.time % 0.033`, which is float arithmetic on an
-    # accumulating value and fires when it feels like it.
-    steps_per_frame = max(1, round((1.0 / 60.0) / dt))
+    # One control tick of world per pass: 20 ms, the same decimation `infer_policy.py` uses.
+    batch = max(1, round(0.020 / dt))
+    period = batch * dt
+    # A frame every N passes, counted — not `data.time % 0.033`, which is float arithmetic on an
+    # accumulating value and fires when it feels like it. 30 rather than 60: `viewer.sync()` copies
+    # the scene on this thread, and with several ducks in it that is the difference between keeping
+    # real time and not.
+    passes_per_frame = max(1, round((1.0 / 30.0) / period))
     step = 0
     next_step = time.perf_counter()
     behind = 0
     try:
         while True:
-            world.step()
+            world.step(batch)
             if viewer is not None and not viewer.is_running():
                 break
-            next_step += dt
+            next_step += period
             slack = next_step - time.perf_counter()
-            # Only sleep when there is something worth sleeping for: `time.sleep` on a 5 ms budget
-            # overshoots, so sleeping every step makes the simulator's seconds longer than real ones.
-            if slack > dt:
+            # Only sleep when there is something worth sleeping for: `time.sleep` on a few
+            # milliseconds overshoots by more than it waits.
+            if slack > 0.002:
                 time.sleep(slack)
             elif slack < -0.25:
                 behind += 1
@@ -446,7 +460,7 @@ def run(world: World, headless: bool) -> None:
                 )
                 next_step = time.perf_counter()
             step += 1
-            if viewer is not None and step % steps_per_frame == 0:
+            if viewer is not None and step % passes_per_frame == 0:
                 viewer.sync()
     except KeyboardInterrupt:
         pass
