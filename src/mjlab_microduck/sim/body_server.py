@@ -52,6 +52,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from mjlab_microduck.sim.tof import COLS, ROWS, Tof
+
 PROTOCOL = 1
 
 # What the policies were trained at, and what `scripts/infer_policy.py` sets. The scenes ship 0.002;
@@ -230,6 +232,9 @@ class Body:
         self.qvel_adr = np.array(
             [model.jnt_dofadr[model.actuator_trnid[a, 0]] for a in self.actuators]
         )
+        # The depth sensor, on the model's own `tof` site — so a head that turns takes it along,
+        # which is what makes `robot.look` a way to scan a room.
+        self.tof = Tof(model, ident(mujoco.mjtObj.mjOBJ_SITE, "tof"), seed=index)
         self.trunk = int(model.jnt_qposadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")])
         self.trunk_dof = int(model.jnt_dofadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")])
 
@@ -331,6 +336,16 @@ class Body:
     def slow_sensors(self) -> dict:
         return {"volts": NOMINAL_VOLTS, "temps_c": [NOMINAL_TEMP_C] * len(JOINT_NAMES)}
 
+    def depth(self) -> dict:
+        """One 8x8 depth frame, in the units `tofd` publishes.
+
+        Sixty-four ray casts, so this is the most expensive thing here — asked for at the sensor's
+        own 15 Hz rather than the control loop's 50, exactly as the hardware is.
+        """
+        with self.world.lock:
+            distance_mm, status = self.tof.frame(self.world.data)
+        return {"rows": ROWS, "cols": COLS, "distance_mm": distance_mm, "status": status}
+
     # ── what the daemon commands ──────────────────────────────────────────
 
     def set_targets(self, wire_targets: list[float]) -> None:
@@ -406,6 +421,8 @@ class Handler(socketserver.StreamRequestHandler):
             return {}
         if op == "slow":
             return body.slow_sensors()
+        if op == "tof":
+            return body.depth()
         raise ValueError(f"unknown op {op!r}")
 
 
