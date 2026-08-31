@@ -148,7 +148,8 @@ src/mjlab_microduck/
 │   ├── mdp.py                        # rewards, events, observations, custom classes
 │   ├── backlash.py                   # make_backlash_variant() env-cfg wrapper
 │   └── microduck_*_env_cfg.py        # one cfg module per task family
-├── train_cli.py                      # `train` entry point (+ --hf-jobs)
+├── train_cli.py                      # `train` script (identical to mjlab's)
+├── train_hook.py                     # intercepts `train ... --hf-jobs`
 └── hf_jobs.py                        # Hugging Face Jobs submission
 ```
 

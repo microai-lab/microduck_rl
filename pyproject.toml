@@ -41,10 +41,17 @@ dependencies = [
 mjlab_microduck = "mjlab_microduck.tasks"
 
 [project.scripts]
-# Shadows mjlab's `train` entry point: identical behavior, plus a --hf-jobs
-# flag that submits the run to Hugging Face Jobs instead (see train_cli.py).
+# This name collides with mjlab's `train` ON PURPOSE and must stay declared.
+# Same-name console scripts are last-writer-wins and both dist-info RECORDs
+# then claim bin/train, so deleting this line does NOT hand the name back to
+# mjlab: `uv sync` uninstalls the file (ours, per our RECORD) and nothing
+# recreates mjlab's, leaving no `train` in the venv at all — `uv run train`
+# then finds some unrelated `train` on PATH (liblinear's, 2026-08-31).
+# The collision is harmless because the two shims are interchangeable:
+# --hf-jobs is intercepted from the `mjlab.tasks` entry point above
+# (train_hook.py), not here. Locked by tests/test_hf_jobs_flag.py.
 train = "mjlab_microduck.train_cli:main"
-  
+
 [tool.ruff]
 src = ["src"]  # Helpful for recognizing first-party imports.
 indent-width = 4
