@@ -1,3 +1,11 @@
+from mjlab_microduck.train_hook import maybe_submit_to_hf_jobs
+
+# `train <task> ... --hf-jobs` submits to HF Jobs and exits here, before any
+# of the cfg imports below: this module is what mjlab's plugin loader pulls
+# in, and it is the only train path no install order can take from us (see
+# train_hook.py). A no-op without the flag.
+maybe_submit_to_hf_jobs()
+
 from mjlab.tasks.registry import register_mjlab_task
 from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
