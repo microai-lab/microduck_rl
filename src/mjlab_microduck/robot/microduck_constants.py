@@ -19,6 +19,10 @@ MICRODUCK_WALK_XML: Path = _ROBOT_DIR / "robot_walk.xml"
 # shells, head shells, jaw, battery, hips) — NOT every geom. Shared by
 # standup / ground-pick / sitstand / roulade / walk-rollers tasks.
 MICRODUCK_GROUNDCONTACT_XML: Path = _ROBOT_DIR / "robot_groundcontact.xml"
+# TRUE all-collisions model: every part carries a collision geom (70 geoms,
+# 37 meshes; power_support demoted to self_collision_only like every variant).
+# No task uses it yet — exported 2026-09 for future envs needing full contact.
+MICRODUCK_ALLCOLLISIONS_XML: Path = _ROBOT_DIR / "robot_allcollisions.xml"
 # 70mm / 15g ball prop for the BallKick task.
 MICRODUCK_BALL_XML: Path = _ROBOT_DIR / "ball.xml"
 # Roller-skate model: 14 actuated joints + passive wheel hinges (passive_*wheel).
@@ -32,6 +36,7 @@ MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML: Path = _ROBOT_DIR / "robot_groundc
 
 assert MICRODUCK_WALK_XML.exists(), f"XML not found: {MICRODUCK_WALK_XML}"
 assert MICRODUCK_GROUNDCONTACT_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_XML}"
+assert MICRODUCK_ALLCOLLISIONS_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_XML}"
 assert MICRODUCK_BALL_XML.exists(), f"XML not found: {MICRODUCK_BALL_XML}"
 assert MICRODUCK_GROUNDCONTACT_ROLLERS_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_ROLLERS_XML}"
 assert MICRODUCK_GROUNDCONTACT_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_BACKLASH_XML}"
@@ -55,6 +60,10 @@ def get_walk_rollers_spec() -> mujoco.MjSpec:
     # NOTE: was loading robot_groundcontact.xml (no wheels) — the roller env
     # silently ran on the wheel-less standup model.
     return mujoco.MjSpec.from_file(str(MICRODUCK_GROUNDCONTACT_ROLLERS_XML))
+
+
+def get_allcollisions_spec() -> mujoco.MjSpec:
+    return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_XML))
 
 
 def get_ball_spec() -> mujoco.MjSpec:
