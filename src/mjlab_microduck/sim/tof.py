@@ -43,7 +43,10 @@ class Tof:
         self.random = np.random.default_rng(seed)
 
         # Zone centres, once. Azimuth about +z (positive toward +y, the duck's left) and elevation
-        # up, both spanning the field of view — row 0 is the top of the frame, as the sensor reports.
+        # up, both spanning the field of view — row 0 is the top of the frame, and column 0 the
+        # sensor's LEFT, as `kinematics::tof` reads the real sensor's buffer. With column 0 on the
+        # right every frame reached the mapper mirrored: oblique walls were inked at their mirror
+        # image across the head's axis, and no loop ever closed on the twin.
         half = np.radians(FOV_DEG) / 2.0
         edges = np.linspace(-half, half, COLS + 1)
         centres = (edges[:-1] + edges[1:]) / 2.0
@@ -51,7 +54,7 @@ class Tof:
         for row in range(ROWS):
             elevation = -centres[row]
             for col in range(COLS):
-                azimuth = centres[col]
+                azimuth = -centres[col]
                 self.directions[row * COLS + col] = [
                     np.cos(elevation) * np.cos(azimuth),
                     np.cos(elevation) * np.sin(azimuth),
