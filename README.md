@@ -39,6 +39,7 @@ uv run play Mjlab-Velocity-Flat-MicroDuck --wandb-run-path <entity/project/run_i
 
 # export to ONNX for deployment
 uv run scripts/export.py Mjlab-Velocity-Flat-MicroDuck --wandb-run-path <...>
+uv run publish --onnx out.onnx --repo <user>/microduck-<name> --kind episodic --duration-s 4.0   # share it on the Hub
 
 # drive the exported policy in CPU MuJoCo with the keyboard
 uv run scripts/infer_policy.py --walking output.onnx
