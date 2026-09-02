@@ -170,7 +170,8 @@ def test_a_perpetual_manifest_says_how_to_come_back():
         (dict(kind="episodic"), "duration_s"),
         (dict(kind="episodic", duration_s=0.0), "duration_s"),
         (dict(kind="episodic", duration_s=1.0, unwind_s=2.0), "unwind_s"),
-        (dict(kind="perpetual"), "unwind_s"),
+        (dict(kind="perpetual", unwind_s=0.0), "unwind_s"),
+        (dict(kind="perpetual", slot="jetpack"), "slot"),
         (dict(kind="perpetual", unwind_s=1.0, duration_s=3.0), "duration_s"),
         (dict(kind="perpetual", unwind_s=1.0, chain=True), "chain"),
         (dict(kind="scripted", duration_s=1.0), "kind"),
@@ -185,6 +186,16 @@ def test_the_builder_refuses_what_the_kind_cannot_mean(kwargs, why):
 def test_a_name_is_a_bare_word():
     with pytest.raises(m.ManifestError, match="name"):
         m.build_manifest(name="user/thing", kind="episodic", description="d", duration_s=1.0)
+
+
+def test_a_gait_is_perpetual_with_nothing_to_unwind():
+    """A walking policy is perpetual too, and goes in a slot — no hold, no unwind, no skill."""
+    gait = m.build_manifest(name="my-walk", kind="perpetual", description="Walks.", slot="walk")
+    m.validate_manifest(gait)
+    assert gait["duration_s"] is None and "unwind_s" not in gait and gait["slot"] == "walk"
+    assert m.install_commands(gait, "u/microduck-my-walk") == "sudo robotctl policy load walk u/microduck-my-walk"
+    no_slot = m.build_manifest(name="g", kind="perpetual", description="d")
+    assert "policy load <slot>" in m.install_commands(no_slot, "u/g")
 
 
 def test_the_readme_tells_the_owner_how_to_run_it():

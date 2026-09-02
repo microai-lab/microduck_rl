@@ -197,6 +197,9 @@ uv run publish --task Mjlab-PoliteBow-Flat-MicroDuck \
 uv run publish --onnx output.onnx --repo <user>/microduck-flamingo \
     --kind perpetual --unwind-s 1.5 --twist-help "[flag, side, 0]"
 
+# A new gait for a slot
+uv run publish --onnx output.onnx --repo <user>/microduck-my-walk --kind perpetual --slot walk
+
 # See what would be uploaded without touching the Hub
 uv run publish --onnx output.onnx --repo <user>/microduck-bow --kind episodic --duration-s 4.0 --dry-run
 ```
@@ -205,7 +208,8 @@ Then on a robot:
 
 ```bash
 sudo robotctl policy add polite-bow <user>/microduck-polite-bow   # episodic: length comes from the manifest
-sudo robotctl policy add flamingo <user>/microduck-flamingo --hold 5   # perpetual: you pick how long
+sudo robotctl policy add flamingo <user>/microduck-flamingo --hold 5   # held pose: you pick how long
+sudo robotctl policy load walk <user>/microduck-my-walk                # gait: into the walk slot
 robotctl robot do polite-bow
 ```
 
@@ -213,10 +217,13 @@ What `--kind` means, and what each needs:
 
 - **episodic** — runs for `--duration-s` and returns itself to a standing pose
   (kicks, roulade, a bow). Add `--chain` if holding the button should repeat it.
-- **perpetual** — holds a pose until told otherwise (the flamingo). Has no
-  length of its own, so it needs `--unwind-s`: how long the daemon drives the
-  idle twist (`--idle`, zeros by default) before handing back to the gait, so
-  the robot is not let go of on one foot.
+- **perpetual** — runs until told otherwise. Two shapes:
+  - a **gait** (a new walk or stand): add `--slot walk` (or `stand`) and
+    nothing else; the owner installs it with `robotctl policy load walk <repo>`.
+  - a **held pose** (the flamingo): give `--unwind-s`, how long the daemon
+    drives the idle twist (`--idle`, zeros by default) before handing back to
+    the gait, so the robot is not let go of on one foot. The owner runs it as a
+    one-shot with `policy add ... --hold <seconds>`.
 
 Before anything is uploaded, `publish` checks the graph is `[1,61] -> [1,14]`
 (a 51-D legacy policy is refused with a message), runs it on plausible inputs

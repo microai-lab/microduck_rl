@@ -35,6 +35,9 @@ KINDS: tuple[str, ...] = ("episodic", "perpetual")
 
 ZERO_TWIST: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
+# The daemon's policy slots, for a gait's `slot` hint (display-only: `robotctl policy load <slot>`).
+SLOTS: tuple[str, ...] = ("walk", "stand", "sitstand", "ground_pick", "kick_left", "kick_right", "roulade")
+
 
 class ManifestError(ValueError):
     """A manifest that the daemon would refuse, or that would load and run wrongly."""
@@ -94,6 +97,7 @@ def build_manifest(
     idle: tuple[float, float, float] = ZERO_TWIST,
     action_scale: float | None = None,
     entry_pose: str = "standing",
+    slot: str | None = None,
     command_help: dict[str, Any] | None = None,
     training: dict[str, Any] | None = None,
     eval: dict[str, Any] | None = None,
@@ -118,18 +122,21 @@ def build_manifest(
                 "an episodic policy is already back when duration_s is up; unwind_s is for perpetual"
             )
     else:
+        # Two things are perpetual: a gait, which lives in a slot (`policy load walk <repo>`) and
+        # needs nothing here, and a held pose like the flamingo, which the owner runs as a
+        # one-shot with `policy add --hold` and which then needs `unwind_s` so the robot is not
+        # let go of on one foot. `unwind_s` is what says which.
         if duration_s is not None:
             raise ManifestError(
                 "a perpetual policy has no length of its own; leave duration_s unset "
-                "(the robot's owner picks --hold when adding it as a skill)"
+                "(a gait runs until told otherwise; a held pose gets --hold when added as a skill)"
             )
-        if unwind_s is None or unwind_s <= 0:
-            raise ManifestError(
-                "a perpetual policy needs unwind_s > 0: how long the daemon drives command.idle "
-                "before handing back to the gait, so the robot is not let go of mid-pose"
-            )
+        if unwind_s is not None and unwind_s <= 0:
+            raise ManifestError("unwind_s must be > 0 when given")
         if chain:
             raise ManifestError("chain is for episodic one-shots a held button repeats")
+    if slot is not None and slot not in SLOTS:
+        raise ManifestError(f"slot must be one of {SLOTS}, not {slot!r}")
     if action_scale is not None and not 0 < action_scale <= 2.0:
         raise ManifestError(f"action_scale {action_scale} is outside (0, 2]")
     if len(idle) != 3:
@@ -162,7 +169,10 @@ def build_manifest(
         manifest["chain"] = bool(chain)
     else:
         manifest["duration_s"] = None
-        manifest["unwind_s"] = float(unwind_s)  # type: ignore[arg-type]
+        if unwind_s is not None:
+            manifest["unwind_s"] = float(unwind_s)
+    if slot is not None:
+        manifest["slot"] = slot
     if action_scale is not None:
         manifest["action_scale"] = float(action_scale)
     if training:
@@ -299,28 +309,41 @@ def smoke_run_onnx(path: Path, steps: int = 50, seed: int = 0) -> None:
 # What else goes in the repo.
 
 
+def install_commands(manifest: dict[str, Any], repo_id: str) -> str:
+    """The `robotctl` lines that put this policy on a robot — one story per shape.
+
+    Episodic: a skill, length from the manifest. Perpetual with `unwind_s`: a held pose the owner
+    runs as a skill with `--hold`. Perpetual without: a gait, loaded into a slot.
+    """
+    name = manifest["name"]
+    if manifest["kind"] == "episodic":
+        return f"sudo robotctl policy add {name} {repo_id}\nrobotctl robot do {name}"
+    if manifest.get("unwind_s") is not None:
+        return f"sudo robotctl policy add {name} {repo_id} --hold <seconds>\nrobotctl robot do {name}"
+    slot = manifest.get("slot", "<slot>")
+    return f"sudo robotctl policy load {slot} {repo_id}"
+
+
 def render_readme(manifest: dict[str, Any], repo_id: str) -> str:
     """A model card that says how to run the policy on a robot, generated so it cannot go stale."""
     kind = manifest["kind"]
     name = manifest["name"]
     description = manifest.get("description", "")
     training = manifest.get("training", {})
+    run = install_commands(manifest, repo_id)
     if kind == "episodic":
-        run = (
-            f"sudo robotctl policy add {name} {repo_id}\n"
-            f"robotctl robot do {name}"
-        )
         timing = f"Runs {manifest['duration_s']} s and returns itself to a standing pose."
         if manifest.get("chain"):
             timing += " Holding the button chains another run."
-    else:
-        run = (
-            f"sudo robotctl policy add {name} {repo_id} --hold <seconds>\n"
-            f"robotctl robot do {name}"
-        )
+    elif manifest.get("unwind_s") is not None:
         timing = (
             f"Holds until told otherwise; the daemon drives `command.idle` for "
             f"{manifest['unwind_s']} s before handing back to the gait."
+        )
+    else:
+        slot = manifest.get("slot")
+        timing = "Runs until told otherwise" + (
+            f" — a gait for the `{slot}` slot." if slot else " — a gait, loaded into a policy slot."
         )
     lines = [
         "---",

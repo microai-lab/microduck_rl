@@ -7,6 +7,9 @@
     # From an ONNX file you already exported
     uv run publish --onnx out.onnx --repo <user>/microduck-flamingo --kind perpetual --unwind-s 1.5
 
+    # A gait for a slot (no hold, no unwind: it runs until told otherwise)
+    uv run publish --onnx walk.onnx --repo <user>/microduck-my-walk --kind perpetual --slot walk
+
 Either way the repo gets `policy.onnx`, a schema-2 `manifest.json` and a README, the file is
 checked for the 61 -> 14 shape and smoke-run before anything is uploaded, and an existing
 `policy.onnx` is not overwritten without `--force`. `--dry-run` writes the repo contents to a
@@ -57,7 +60,9 @@ class PublishConfig:
     chain: bool = False
     """episodic only: a held button chains another run (roulade does, a kick does not)."""
     unwind_s: float | None = None
-    """perpetual only: seconds the daemon drives `idle` before handing back to the gait."""
+    """perpetual held pose (flamingo): seconds the daemon drives `idle` before handing back. Leave unset for a gait."""
+    slot: Literal["walk", "stand", "sitstand", "ground_pick", "kick_left", "kick_right", "roulade"] | None = None
+    """perpetual gait: which slot it is for (walk, stand, ...). Display-only; drives the install hint."""
     idle: tuple[float, float, float] = (0.0, 0.0, 0.0)
     """The twist that means 'stop doing the thing'. Zeros for every one-shot published so far."""
     action_scale: float | None = None
@@ -160,6 +165,7 @@ def run(cfg: PublishConfig) -> int:
             idle=cfg.idle,
             action_scale=cfg.action_scale,
             entry_pose=cfg.entry_pose,
+            slot=cfg.slot,
             command_help=command_help,
             training=training,
         )
@@ -202,8 +208,8 @@ def run(cfg: PublishConfig) -> int:
         if cfg.tag:
             api.create_tag(cfg.repo, tag=cfg.tag, tag_message=f"{name} {cfg.tag}")
             print(f"[publish] tagged {cfg.tag}")
-        print(f"[publish] on a robot: sudo robotctl policy add {name} {cfg.repo}"
-              + ("" if cfg.kind == "episodic" else " --hold <seconds>"))
+        first = m.install_commands(manifest, cfg.repo).splitlines()[0]
+        print(f"[publish] on a robot: {first}")
         return 0
     except m.ManifestError as e:
         _fail(str(e))
