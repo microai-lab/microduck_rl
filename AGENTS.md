@@ -46,7 +46,7 @@ Never launch a long run without one.
   13D command block `[twist(3), head_pose(4), body_pose(6)]`, in that order.
   An env that doesn't use a command slot ZERO-PADS it (keep the obs term,
   sample tiny ranges) — never delete a slot.
-- **Joint layout** (14 servos, ctrl idx = joint idx on walk/allcollisions
+- **Joint layout** (14 servos, ctrl idx = joint idx on walk/groundcontact
   models): 0–4 left leg (hip_yaw, hip_roll, hip_pitch, knee, ankle), 5–8
   neck/head (neck_pitch, head_pitch, head_yaw, head_roll), 9–13 right leg.
   On roller/backlash models, passive joints INTERLEAVE — never hardcode joint
@@ -75,7 +75,7 @@ Never launch a long run without one.
   REWARD on the same quantity must measure the same view — otherwise the policy
   is punished for correcting what it sees.
 - `-Backlash-` task variants must mirror their base task's robot model
-  (walk / allcollisions / rollers) so backlash A/B comparisons are unconfounded.
+  (walk / groundcontact / rollers) so backlash A/B comparisons are unconfounded.
 
 ## Building a new env — the workflow
 

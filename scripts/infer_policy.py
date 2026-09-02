@@ -804,6 +804,7 @@ class PolicyInference:
 def main():
     parser = argparse.ArgumentParser(description="Run ONNX policy in MuJoCo")
     parser.add_argument("--roller", action="store_true", help="Use roller skate robot XML (robot_walk_rollers.xml)")
+    parser.add_argument("--scene", type=str, default=None, help="Path to a scene XML, overriding the default pick (e.g. src/mjlab_microduck/robot/microduck/scene_allcollisions.xml)")
     parser.add_argument("--walking", type=str, default=None, help="Path to walking policy ONNX file")
     parser.add_argument("--standing", "-s", type=str, default=None, help="Path to standing policy ONNX file")
     parser.add_argument("--ground-pick", type=str, default=None, help="Path to ground pick policy ONNX file (press G to activate)")
@@ -871,7 +872,11 @@ def main():
             return
 
     # Load MuJoCo model. Kick policies get a scene with a ball to kick.
-    if args.roller:
+    # --scene overrides everything (any scene whose robot has the standard
+    # 14-servo layout works, e.g. scene_allcollisions.xml).
+    if args.scene:
+        xml_path = args.scene
+    elif args.roller:
         xml_path = MICRODUCK_ROLLERS_XML
     elif args.kick_left or args.kick_right:
         xml_path = MICRODUCK_BALL_XML
