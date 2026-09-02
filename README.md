@@ -90,6 +90,10 @@ uv run scripts/infer_policy.py --walking walk.onnx --standing stand.onnx \
 
 Keyboard-driven (velocity commands, `G` ground pick, `Y` sit/stand, `R` roulade,
 `K`/`L` kicks); `--debug`, `--save-csv`, `--record` support sim2real comparisons.
+The servos are simulated with the same BAM M6 XL330 model the policies are
+trained against (voltage control + load-dependent friction, via
+`bam.mujoco.MujocoController`); `--vin` / `--vin-drop-gain` / `--kp-fw` pin the
+training DR ranges to one value, `--no-bam` falls back to the XML PD actuators.
 
 ### Backlash variants
 
