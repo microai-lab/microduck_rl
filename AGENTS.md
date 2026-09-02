@@ -16,6 +16,8 @@ uv run train <TASK_ID> --env.scene.num-envs 4096    # train (add --hf-jobs for H
 uv run train <TASK_ID> --env.scene.num-envs 64 --agent.max_iterations 5   # SMOKE TEST — always run first
 uv run play <TASK_ID> --wandb-run-path <entity/project/run_id>
 uv run scripts/export.py <TASK_ID> --wandb-run-path <...>   # → ONNX (bakes obs normalizer — mandatory path)
+uv run publish --task <TASK_ID> --wandb-run-path <...> --checkpoint N --repo <user>/microduck-<name> --kind episodic --duration-s 4.0
+                                                    # → HF Hub repo (policy.onnx + schema-2 manifest.json + README) the daemon loads via `robotctl policy add`
 uv run scripts/infer_policy.py --walking out.onnx   # CPU MuJoCo deployment rehearsal
 uv run --with pytest pytest tests/
 ```
@@ -36,7 +38,11 @@ Never launch a long run without one.
 - `src/mjlab_microduck/robot/microduck/` — MJCF exports from Onshape
   (onshape-to-robot, one `config_mjcf_*.json` per model) + scenes + `add_backlash.py`.
 - `src/mjlab_microduck/actuator/friction_dr_bam.py` — BAM actuator + friction DR + backlash encoder.
-- `scripts/` — export, infer, sim2real comparison, wandb helpers.
+- `src/mjlab_microduck/export.py` — the ONNX export (normalizer baked in); `scripts/export.py` wraps it.
+- `src/mjlab_microduck/publish/` — `uv run publish`: schema-2 manifest builder + ONNX shape/smoke
+  gate + Hub upload. Contract = `docs/policy-manifest.md` in the `microduck` repo; only
+  constant-command episodic/perpetual policies are publishable (phase/posture-flag are the set's).
+- `scripts/` — export wrapper, infer, sim2real comparison, wandb helpers.
 - `tests/` — cfg-invariant and mdp-function regression tests (CPU, no GPU needed).
 
 ## Invariants — do not break these
