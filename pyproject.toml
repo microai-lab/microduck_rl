@@ -22,6 +22,7 @@ dependencies = [
     "rustypot>=1.4.2",
     "huggingface_hub>=0.27.0",
     "matplotlib>=3.10.9",
+    "pillow>=11,<13",
     # mjlab 1.3.0 imports scipy (terrains/heightfield_terrains.py) but forgets
     # to declare it — without this line a fresh `uv sync` (e.g. on HF jobs)
     # can't even `import mjlab_microduck` (found 2026-07-21).

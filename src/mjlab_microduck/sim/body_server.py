@@ -42,7 +42,11 @@ filter does on the robot, on the other side of the same wire.
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import json
+import math
+import os
 import socket
 import socketserver
 import threading
@@ -51,6 +55,7 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+from PIL import Image
 
 from mjlab_microduck.sim.tof import COLS, ROWS, Tof
 
@@ -100,6 +105,12 @@ SPACING = 0.5
 # `robotctl health` shows a plausible robot instead of an alarming one.
 NOMINAL_VOLTS = 7.4
 NOMINAL_TEMP_C = 32.0
+
+DEFAULT_RENDER_WIDTH = 1280
+DEFAULT_RENDER_HEIGHT = 720
+DEFAULT_RENDER_FPS = 24
+DEFAULT_RENDER_QUALITY = 95
+DEFAULT_RENDER_FORMAT = "jpeg"
 
 
 def duck_prefix(index: int) -> str:
@@ -383,6 +394,250 @@ class Body:
         model.actuator_biasprm[self.actuator_slice, 1] = -self._gain * scale
 
 
+class RenderStream:
+    """Render cached JPEGs from snapshots of the authoritative MuJoCo world.
+
+    Snapshotting is the only work performed under ``world.lock``. OpenGL rendering and JPEG
+    encoding happen against a private ``MjData`` after the lock is released, so a slow software
+    renderer cannot stall the 50 Hz physics and robot control path.
+    """
+
+    def __init__(
+        self,
+        world: World,
+        *,
+        width: int = DEFAULT_RENDER_WIDTH,
+        height: int = DEFAULT_RENDER_HEIGHT,
+        fps: int = DEFAULT_RENDER_FPS,
+        quality: int = DEFAULT_RENDER_QUALITY,
+        image_format: str = DEFAULT_RENDER_FORMAT,
+        exit_idle_seconds: float | None = None,
+    ):
+        self._validate_settings(width, height, fps, quality, image_format)
+        if exit_idle_seconds is not None and exit_idle_seconds <= 0:
+            raise ValueError("render idle exit must be positive")
+        self.world = world
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.quality = quality
+        self.image_format = image_format
+        self.backend = os.getenv("MUJOCO_GL", "default")
+        self.exit_idle_seconds = exit_idle_seconds
+        self.exit_requested = threading.Event()
+        self._condition = threading.Condition()
+        self._frame: dict | None = None
+        self._error: str | None = None
+        self._stopping = threading.Event()
+        self._clients = 0
+        self._had_client = False
+        self._idle_timer: threading.Timer | None = None
+        self._camera_azimuth = 135.0
+        self._camera_elevation = -18.0
+        self._camera_distance = max(0.85, 0.65 + len(self.world.bodies) * 0.2)
+        self._thread = threading.Thread(
+            target=self._run, name="mujoco-render", daemon=True
+        )
+
+    @staticmethod
+    def _validate_settings(
+        width: int, height: int, fps: int, quality: int, image_format: str
+    ) -> None:
+        if width < 1 or height < 1 or width * height > 3840 * 2160:
+            raise ValueError("render dimensions must be positive and at most 3840x2160 pixels")
+        if not 1 <= fps <= 60:
+            raise ValueError("render FPS must be between 1 and 60")
+        if not 1 <= quality <= 100:
+            raise ValueError("JPEG quality must be between 1 and 100")
+        if image_format not in {"jpeg", "png"}:
+            raise ValueError("render format must be jpeg or png")
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stopping.set()
+        with self._condition:
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+            self._condition.notify_all()
+        if self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+
+    def client_connected(self) -> None:
+        with self._condition:
+            self._clients += 1
+            self._had_client = True
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+
+    def client_disconnected(self) -> None:
+        with self._condition:
+            self._clients = max(0, self._clients - 1)
+            if (
+                self._clients == 0
+                and self._had_client
+                and self.exit_idle_seconds is not None
+                and not self._stopping.is_set()
+            ):
+                if self._idle_timer is not None:
+                    self._idle_timer.cancel()
+                self._idle_timer = threading.Timer(
+                    self.exit_idle_seconds, self._exit_if_still_idle
+                )
+                self._idle_timer.daemon = True
+                self._idle_timer.start()
+
+    def _exit_if_still_idle(self) -> None:
+        with self._condition:
+            self._idle_timer = None
+            if self._clients == 0 and not self._stopping.is_set():
+                self.exit_requested.set()
+
+    def camera(self, action: str, dx: float = 0.0, dy: float = 0.0) -> dict:
+        if not math.isfinite(dx) or not math.isfinite(dy):
+            raise ValueError("camera movement must be finite")
+        with self._condition:
+            if action == "orbit":
+                self._camera_azimuth = (self._camera_azimuth - dx * 0.3) % 360
+                self._camera_elevation = min(
+                    85.0, max(-85.0, self._camera_elevation - dy * 0.25)
+                )
+            elif action == "zoom":
+                self._camera_distance = min(
+                    5.0, max(0.25, self._camera_distance * math.exp(dy * 0.0015))
+                )
+            elif action == "reset":
+                self._camera_azimuth = 135.0
+                self._camera_elevation = -18.0
+                self._camera_distance = max(0.85, 0.65 + len(self.world.bodies) * 0.2)
+            else:
+                raise ValueError(f"unknown camera action {action!r}")
+            return {
+                "azimuth": self._camera_azimuth,
+                "elevation": self._camera_elevation,
+                "distance": self._camera_distance,
+            }
+
+    def configure(
+        self,
+        *,
+        width: int,
+        height: int,
+        fps: int,
+        quality: int,
+        image_format: str,
+    ) -> dict:
+        self._validate_settings(width, height, fps, quality, image_format)
+        with self._condition:
+            self.width = width
+            self.height = height
+            self.fps = fps
+            self.quality = quality
+            self.image_format = image_format
+            self._condition.notify_all()
+            return {
+                "width": width,
+                "height": height,
+                "fps": fps,
+                "quality": quality,
+                "format": image_format,
+            }
+
+    def get(self, after: int = 0, timeout_ms: int = 1000) -> dict:
+        if after < 0:
+            raise ValueError("render sequence must not be negative")
+        if not 0 <= timeout_ms <= 30_000:
+            raise ValueError("render timeout_ms must be between 0 and 30000")
+        deadline = time.monotonic() + timeout_ms / 1000
+        with self._condition:
+            while self._frame is None or self._frame["seq"] <= after:
+                if self._error is not None:
+                    raise RuntimeError(f"MuJoCo renderer failed: {self._error}")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self._stopping.is_set():
+                    return {"seq": after, "timeout": True}
+                self._condition.wait(remaining)
+            return dict(self._frame)
+
+    def _run(self) -> None:
+        renderer = None
+        try:
+            render_data = mujoco.MjData(self.world.model)
+            camera = mujoco.MjvCamera()
+            camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+            next_frame = time.monotonic()
+            seq = 0
+            active_size = None
+            while not self._stopping.is_set():
+                with self._condition:
+                    width = self.width
+                    height = self.height
+                    fps = self.fps
+                    quality = self.quality
+                    image_format = self.image_format
+                    camera.azimuth = self._camera_azimuth
+                    camera.elevation = self._camera_elevation
+                    camera.distance = self._camera_distance
+                if active_size != (width, height):
+                    if renderer is not None:
+                        renderer.close()
+                    visual_global = getattr(
+                        getattr(self.world.model, "vis", None), "global_", None
+                    )
+                    if visual_global is not None:
+                        visual_global.offwidth = max(visual_global.offwidth, width)
+                        visual_global.offheight = max(visual_global.offheight, height)
+                    renderer = mujoco.Renderer(
+                        self.world.model, height=height, width=width
+                    )
+                    active_size = (width, height)
+                period = 1.0 / fps
+                delay = next_frame - time.monotonic()
+                if delay > 0 and self._stopping.wait(delay):
+                    break
+
+                with self.world.lock:
+                    mujoco.mj_copyData(render_data, self.world.model, self.world.data)
+                sim_time = float(render_data.time)
+                if self.world.bodies:
+                    trunk = self.world.bodies[0].trunk
+                    camera.lookat[:] = render_data.qpos[trunk : trunk + 3]
+                    camera.lookat[2] = max(0.08, float(render_data.qpos[trunk + 2]) * 0.6)
+                renderer.update_scene(render_data, camera=camera)
+                rgb = renderer.render()
+                output = io.BytesIO()
+                if image_format == "png":
+                    Image.fromarray(rgb).save(output, format="PNG", compress_level=1)
+                    mime = "image/png"
+                else:
+                    Image.fromarray(rgb).save(output, format="JPEG", quality=quality)
+                    mime = "image/jpeg"
+                seq += 1
+                frame = {
+                    "seq": seq,
+                    "sim_time": sim_time,
+                    "width": width,
+                    "height": height,
+                    "mime": mime,
+                    "backend": self.backend,
+                    "image_b64": base64.b64encode(output.getvalue()).decode("ascii"),
+                }
+                with self._condition:
+                    self._frame = frame
+                    self._condition.notify_all()
+                next_frame = max(next_frame + period, time.monotonic())
+        except Exception as error:  # noqa: BLE001 - renderer failures are surfaced to clients
+            with self._condition:
+                self._error = str(error)
+                self._condition.notify_all()
+        finally:
+            if renderer is not None:
+                renderer.close()
+
+
 class Handler(socketserver.StreamRequestHandler):
     """One duck's daemon. One connection at a time, which is the real relationship too."""
 
@@ -390,14 +645,28 @@ class Handler(socketserver.StreamRequestHandler):
         self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         body: Body = self.server.body
         print(f"== duck {body.index}: daemon connected from {self.client_address}", flush=True)
-        for raw in self.rfile:
-            try:
-                answer = self.dispatch(body, json.loads(raw))
-            except Exception as error:  # a bad frame must not take the simulator down with it
-                answer = {"error": str(error)}
-            self.wfile.write((json.dumps(answer) + "\n").encode())
-            self.wfile.flush()
-        print(f"== duck {body.index}: daemon disconnected", flush=True)
+        render_client = False
+        try:
+            for raw in self.rfile:
+                try:
+                    request = json.loads(raw)
+                    renderer = self.server.renderer
+                    if (
+                        request.get("op") == "render"
+                        and renderer is not None
+                        and not render_client
+                    ):
+                        renderer.client_connected()
+                        render_client = True
+                    answer = self.dispatch(body, request)
+                except Exception as error:  # noqa: BLE001 - isolate malformed client frames
+                    answer = {"error": str(error)}
+                self.wfile.write((json.dumps(answer) + "\n").encode())
+                self.wfile.flush()
+        finally:
+            if render_client:
+                self.server.renderer.client_disconnected()
+            print(f"== duck {body.index}: daemon disconnected", flush=True)
 
     def dispatch(self, body: Body, request: dict) -> dict:
         op = request.get("op")
@@ -423,6 +692,34 @@ class Handler(socketserver.StreamRequestHandler):
             return body.slow_sensors()
         if op == "tof":
             return body.depth()
+        if op == "render":
+            renderer: RenderStream | None = self.server.renderer
+            if renderer is None:
+                raise RuntimeError("MuJoCo rendering is disabled; start duck-body with --render")
+            return renderer.get(
+                after=int(request.get("after", 0)),
+                timeout_ms=int(request.get("timeout_ms", 1000)),
+            )
+        if op == "camera":
+            renderer: RenderStream | None = self.server.renderer
+            if renderer is None:
+                raise RuntimeError("MuJoCo rendering is disabled; start duck-body with --render")
+            return renderer.camera(
+                action=str(request.get("action", "")),
+                dx=float(request.get("dx", 0.0)),
+                dy=float(request.get("dy", 0.0)),
+            )
+        if op == "render_config":
+            renderer: RenderStream | None = self.server.renderer
+            if renderer is None:
+                raise RuntimeError("MuJoCo rendering is disabled; start duck-body with --render")
+            return renderer.configure(
+                width=int(request["width"]),
+                height=int(request["height"]),
+                fps=int(request.get("fps", DEFAULT_RENDER_FPS)),
+                quality=int(request.get("quality", DEFAULT_RENDER_QUALITY)),
+                image_format=str(request.get("format", DEFAULT_RENDER_FORMAT)),
+            )
         raise ValueError(f"unknown op {op!r}")
 
 
@@ -431,7 +728,7 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def run(world: World, headless: bool) -> None:
+def run(world: World, headless: bool, stop_event: threading.Event | None = None) -> None:
     """Step in real time.
 
     **Real time, not as fast as possible.** The daemon's loop is wall-clock and its health gate
@@ -448,7 +745,7 @@ def run(world: World, headless: bool) -> None:
             viewer = mujoco.viewer.launch_passive(
                 world.model, world.data, show_left_ui=False, show_right_ui=False
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - viewer fallback must include GL failures
             print(f"== no viewer ({error}); running headless", flush=True)
 
     dt = world.model.opt.timestep
@@ -464,7 +761,7 @@ def run(world: World, headless: bool) -> None:
     next_step = time.perf_counter()
     behind = 0
     try:
-        while True:
+        while stop_event is None or not stop_event.is_set():
             world.step(batch)
             if viewer is not None and not viewer.is_running():
                 break
@@ -498,6 +795,20 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7801, help="the first duck's port; +1 each")
     parser.add_argument("--headless", action="store_true", help="no viewer window")
+    parser.add_argument("--render", action="store_true", help="serve cached JPEG frames")
+    parser.add_argument("--render-width", type=int, default=DEFAULT_RENDER_WIDTH)
+    parser.add_argument("--render-height", type=int, default=DEFAULT_RENDER_HEIGHT)
+    parser.add_argument("--render-fps", type=int, default=DEFAULT_RENDER_FPS)
+    parser.add_argument("--render-quality", type=int, default=DEFAULT_RENDER_QUALITY)
+    parser.add_argument(
+        "--render-format", choices=("jpeg", "png"), default=DEFAULT_RENDER_FORMAT
+    )
+    parser.add_argument(
+        "--exit-on-render-idle",
+        type=float,
+        metavar="SECONDS",
+        help="exit after the last render client stays disconnected for this long",
+    )
     parser.add_argument(
         "--limp",
         action="store_true",
@@ -520,25 +831,54 @@ def main() -> None:
         )
     if args.ducks < 1:
         raise SystemExit("--ducks needs at least one duck")
+    if args.exit_on_render_idle is not None and not args.render:
+        raise SystemExit("--exit-on-render-idle requires --render")
 
     world = World(args.scene, args.ducks)
     pose, trunk_z = pose_table(args.scene, args.keyframe)
     servers = []
+    renderer = None
     for index in range(args.ducks):
         body = Body(world, index, limp=args.limp)
         body.place(pose, trunk_z, offset_y=index * SPACING)
         world.bodies.append(body)
         server = Server((args.host, args.port + index), Handler)
         server.body = body
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        server.renderer = None
         servers.append(server)
 
     mujoco.mj_forward(world.model, world.data)
+    if args.render:
+        renderer = RenderStream(
+            world,
+            width=args.render_width,
+            height=args.render_height,
+            fps=args.render_fps,
+            quality=args.render_quality,
+            image_format=args.render_format,
+            exit_idle_seconds=args.exit_on_render_idle,
+        )
+        renderer.start()
+        for server in servers:
+            server.renderer = renderer
+    for server in servers:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"== {args.scene.name}: {args.ducks} duck(s), starting at {args.keyframe}", flush=True)
     for index in range(args.ducks):
         print(f"==   duck {index}: robotd --sim {args.host}:{args.port + index}", flush=True)
 
-    run(world, headless=args.headless)
+    try:
+        run(
+            world,
+            headless=args.headless,
+            stop_event=renderer.exit_requested if renderer is not None else None,
+        )
+    finally:
+        if renderer is not None:
+            renderer.close()
+        for server in servers:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":
