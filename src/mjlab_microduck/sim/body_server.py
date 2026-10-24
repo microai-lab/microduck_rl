@@ -452,6 +452,12 @@ class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+    def __init__(self, *args, **kwargs):
+        # Standalone harnesses construct Server directly; main replaces this
+        # disabled service with the shared renderer when --render is enabled.
+        self.visualization = VisualizationService()
+        super().__init__(*args, **kwargs)
+
 
 def run(world: World, headless: bool, stop_event: threading.Event | None = None) -> None:
     """Step in real time.

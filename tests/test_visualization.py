@@ -1,5 +1,8 @@
+import json
+import socket
 import threading
 from argparse import Namespace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -168,6 +171,28 @@ def test_disabled_visualization_preserves_protocol_but_rejects_requests():
     assert service.exit_requested is None
     with pytest.raises(RuntimeError, match="disabled"):
         service.dispatch({"op": "render"})
+
+
+def test_standalone_body_server_defaults_to_disabled_visualization():
+    from mjlab_microduck.sim.body_server import PROTOCOL, Handler, Server
+
+    with Server(("127.0.0.1", 0), Handler) as server:
+        server.body = SimpleNamespace(index=0)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with socket.create_connection(server.server_address, timeout=2) as connection:
+                with connection.makefile("rwb") as wire:
+                    request = {"op": "hello", "protocol": PROTOCOL}
+                    wire.write(json.dumps(request).encode() + b"\n")
+                    wire.flush()
+                    assert json.loads(wire.readline()) == {"protocol": PROTOCOL}
+                    wire.write(b'{"op":"render"}\n')
+                    wire.flush()
+                    assert "disabled" in json.loads(wire.readline())["error"]
+        finally:
+            server.shutdown()
+            worker.join(timeout=2)
 
 
 def test_visualization_requires_render_for_idle_exit():
