@@ -96,11 +96,11 @@ CKPT_ONE_SHOT=1 uv run python scripts/hf/uploader.py || true
 if [ "$TRAIN_RC" -eq 0 ] && [ "${AUTO_EXPORT:-1}" = "1" ]; then
     set +e
     TASK_ID=${TRAIN_ARGS%% *}
-    CKPT=$(ls -t logs/rsl_rl/*/model_*.pt 2>/dev/null | head -1)
+    CKPT=$(ls -t logs/rsl_rl/*/*/model_*.pt 2>/dev/null | head -1)
     if [ -n "$CKPT" ]; then
         echo "[bootstrap] auto-exporting ONNX from $(basename "$CKPT")"
         uv run python scripts/export.py "$TASK_ID" \
-            --checkpoint-file "$(basename "$CKPT")" \
+            --checkpoint-file "$CKPT" \
             --num-envs 1 --onnx-file /work/policy.onnx \
         && uv run python - <<'PY'
 import os
@@ -325,6 +325,11 @@ def submit(argv: list[str]) -> int:
         "CKPT_REPO": ckpt_repo,
         "TRAIN_ARGS": " ".join(shlex.quote(a) for a in [args.task, *train_args]),
     }
+    # Warm start (tasks/mdp.py Patch 5): curricula restart at 0 after the
+    # checkpoint load. Forwarded so `MICRODUCK_WARM_START=1 uv run train ... --hf-jobs`
+    # behaves like the local run.
+    if os.environ.get("MICRODUCK_WARM_START"):
+        env["MICRODUCK_WARM_START"] = os.environ["MICRODUCK_WARM_START"]
     secrets: dict[str, str] = {"HF_TOKEN": token}
 
     # Forward wandb credentials (env var, then ~/.netrc)
