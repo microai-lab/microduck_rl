@@ -39,6 +39,7 @@ own shape lives is the whole reason the protocol carries the robot's units rathe
 gives an orientation quaternion, so this does the rotation — the same arithmetic the IMU's SFLP
 filter does on the robot, on the other side of the same wire.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,18 +78,42 @@ HOME_TRUNK_Z = 0.125
 # it. Duplicated here rather than shared, because the two repositories cannot share a constant — and
 # checked against the model at startup, which is the next best thing.
 JOINT_NAMES = (
-    "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee", "left_ankle",
-    "neck_pitch", "head_pitch", "head_yaw", "head_roll", "mouth",
-    "right_hip_yaw", "right_hip_roll", "right_hip_pitch", "right_knee", "right_ankle",
+    "left_hip_yaw",
+    "left_hip_roll",
+    "left_hip_pitch",
+    "left_knee",
+    "left_ankle",
+    "neck_pitch",
+    "head_pitch",
+    "head_yaw",
+    "head_roll",
+    "mouth",
+    "right_hip_yaw",
+    "right_hip_roll",
+    "right_hip_pitch",
+    "right_knee",
+    "right_ankle",
 )
 MOUTH_INDEX = JOINT_NAMES.index("mouth")
 
 # `duck_control::DEFAULT_POSITION`, and `DEFAULT_POSE` in `infer_policy.py` with the mouth put back.
 # The right leg is mirrored, not symmetric — worth reading rather than assuming.
 HOME_POSE = (
-    0.0, -0.0873, -0.4579, -0.0049, 0.4530,
-    0.3491, 0.3491, 0.0, 0.0, 0.0,
-    0.0, 0.0873, 0.4579, 0.0049, -0.4530,
+    0.0,
+    -0.0873,
+    -0.4579,
+    -0.0049,
+    0.4530,
+    0.3491,
+    0.3491,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0873,
+    0.4579,
+    0.0049,
+    -0.4530,
 )
 
 SCENES = Path(__file__).resolve().parents[1] / "robot" / "microduck"
@@ -113,7 +138,9 @@ def duck_prefix(index: int) -> str:
     return "" if index == 0 else f"d{index}_"
 
 
-def build_world(scene: Path, count: int) -> mujoco.MjModel:
+def build_world(
+    scene: Path, count: int, *, actuator_model: str = "xml"
+) -> mujoco.MjModel:
     """One model holding `count` ducks, so they share a floor and can bump into each other.
 
     The scene already contains one duck; the rest are attached to it under a name prefix, which is
@@ -121,17 +148,83 @@ def build_world(scene: Path, count: int) -> mujoco.MjModel:
     ducks in separate physics can be beside each other on a screen and never touch, and "beside each
     other" is what every social behaviour is about.
     """
-    if count == 1:
+    if actuator_model not in {"xml", "bam"}:
+        raise ValueError(f"unknown actuator model {actuator_model!r}")
+    if count == 1 and actuator_model == "xml":
         return mujoco.MjModel.from_xml_path(str(scene))
 
     spec = mujoco.MjSpec.from_file(str(scene))
     for index in range(1, count):
         # A fresh child every time: `attach` renames the spec it is given, so reusing one gives the
         # third duck names like `d2_d1_left_hip_yaw` and a compile error about incompatible ids.
-        robot = mujoco.MjSpec.from_file(str(ROBOT_ONLY))
+        robot_path = (
+            SCENES / "robot_allcollisions_backlash.xml"
+            if actuator_model == "bam"
+            else ROBOT_ONLY
+        )
+        robot = mujoco.MjSpec.from_file(str(robot_path))
         frame = spec.worldbody.add_frame(pos=[0.0, index * SPACING, 0.0])
         spec.attach(robot, prefix=duck_prefix(index), frame=frame)
-    return spec.compile()
+    if actuator_model == "bam":
+        from mjlab_microduck.sim.bam import convert_to_motors
+
+        # Mirror name_servo_collision_geoms + FULL_COLLISION without importing Torch/mjlab.
+        # Anonymous collision geoms keep the XML settings, as in the compiled training entity.
+        counts: dict[str, int] = {}
+        roots = {f"{duck_prefix(index)}trunk_base" for index in range(count)}
+        for geom in spec.geoms:
+            owner = geom.parent
+            while owner.name not in roots and owner.name != "world":
+                owner = owner.parent
+            if owner.name not in roots:
+                # Props and scenery are authoritative scene content, not robot collision
+                # geometry. Their contact dimensions must survive the BAM conversion.
+                continue
+            if geom.meshname.endswith("xl330") and (geom.contype or geom.conaffinity):
+                body_name = geom.parent.name
+                number = counts.get(body_name, 0)
+                counts[body_name] = number + 1
+                geom.name = f"{body_name}_{number}_servo_collision"
+            if geom.name.endswith("_collision"):
+                foot = geom.name.endswith(
+                    ("left_foot_collision", "right_foot_collision")
+                )
+                geom.condim = 3 if foot else 1
+                if foot:
+                    geom.priority = 1
+                    geom.friction[0] = 1.0
+        # Scene props may have their own servos. Only the duck actuators belong
+        # to this BAM controller; converting a prop would leave its angle input
+        # interpreted as torque with nobody providing its intended position loop.
+        duck_names = {
+            f"{duck_prefix(index)}{name}"
+            for index in range(count)
+            for name in JOINT_NAMES
+        }
+        convert_to_motors(
+            spec,
+            tuple(
+                actuator.name
+                for actuator in spec.actuators
+                if actuator.name in duck_names
+            ),
+        )
+    model = spec.compile()
+    if actuator_model == "bam":
+        # Exact v8 training solver settings (MujocoCfg), not the XML's legacy Euler defaults.
+        model.opt.timestep = TIMESTEP
+        model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+        model.opt.solver = mujoco.mjtSolver.mjSOL_NEWTON
+        model.opt.cone = mujoco.mjtCone.mjCONE_PYRAMIDAL
+        model.opt.jacobian = mujoco.mjtJacobian.mjJAC_AUTO
+        model.opt.iterations = 30
+        model.opt.ls_iterations = 50
+        model.opt.tolerance = 1e-8
+        model.opt.ls_tolerance = 0.01
+        model.opt.ccd_iterations = 50
+        model.opt.impratio = 1.0
+        model.opt.gravity[:] = [0, 0, -9.81]
+    return model
 
 
 def pose_table(scene: Path, keyframe: str) -> tuple[dict[str, float] | None, float]:
@@ -144,7 +237,9 @@ def pose_table(scene: Path, keyframe: str) -> tuple[dict[str, float] | None, flo
     if keyframe.upper() == "HOME":
         return None, HOME_TRUNK_Z
     model = mujoco.MjModel.from_xml_path(str(scene))
-    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(model.nkey)]
+    names = [
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(model.nkey)
+    ]
     if keyframe not in names:
         raise SystemExit(
             f"no keyframe {keyframe!r} in {scene.name}. It has: {', '.join(n for n in names if n)}"
@@ -179,12 +274,14 @@ class World:
     must not wait on the solver, for the same reason a real bus read does not wait on a servo.
     """
 
-    def __init__(self, scene: Path, count: int = 1):
-        self.model = build_world(scene, count)
+    def __init__(self, scene: Path, count: int = 1, *, actuator_model: str = "xml"):
+        self.actuator_model = actuator_model
+        self.model = build_world(scene, count, actuator_model=actuator_model)
         self.model.opt.timestep = TIMESTEP
         self.data = mujoco.MjData(self.model)
         self.lock = threading.Lock()
         self.bodies: list[Body] = []
+        self._physics_steps = 0
 
     def step(self, times: int = 1) -> None:
         """Advance the world, taking the lock once for the whole batch.
@@ -197,6 +294,9 @@ class World:
         """
         with self.lock:
             for _ in range(times):
+                for body in self.bodies:
+                    if body.bam is not None:
+                        body.bam.update()
                 mujoco.mj_step(self.model, self.data)
                 # A duck nobody has enabled yet is put back where it was. Physics is shared, so
                 # it cannot simply not be stepped — and a hand steadying one robot while another
@@ -204,6 +304,14 @@ class World:
                 for body in self.bodies:
                     if not body.released:
                         body.restore()
+                self._physics_steps += 1
+                if self._physics_steps % 4 == 0:
+                    if self.actuator_model == "bam":
+                        # Training refreshes the solve/derived state after decimation. BAM's
+                        # next load-dependent friction update consumes these force fields too.
+                        mujoco.mj_forward(self.model, self.data)
+                    for body in self.bodies:
+                        body.sample_velocity()
 
 
 class Body:
@@ -225,12 +333,16 @@ class Body:
         self.actuators = []
         self.to_wire = []
         for wire_index, name in enumerate(JOINT_NAMES):
-            found = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, self.prefix + name)
+            found = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_ACTUATOR, self.prefix + name
+            )
             if found >= 0:
                 self.actuators.append(found)
                 self.to_wire.append(wire_index)
         if not self.actuators:
-            raise SystemExit(f"no actuated joints for duck {index} (prefix {self.prefix!r})")
+            raise SystemExit(
+                f"no actuated joints for duck {index} (prefix {self.prefix!r})"
+            )
 
         self.qpos_adr = np.array(
             [model.jnt_qposadr[model.actuator_trnid[a, 0]] for a in self.actuators]
@@ -244,11 +356,27 @@ class Body:
         # Built only when this duck is one of `--cameras`: a renderer costs 12 ms a frame, which is
         # forty times what stepping four ducks' physics costs.
         self.camera: Camera | None = None
-        self.trunk = int(model.jnt_qposadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")])
-        self.trunk_dof = int(model.jnt_dofadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")])
+        self.trunk = int(
+            model.jnt_qposadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")]
+        )
+        self.trunk_dof = int(
+            model.jnt_dofadr[ident(mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")]
+        )
 
         self.actuator_slice = np.array(self.actuators)
         self._gain = model.actuator_gainprm[self.actuator_slice, 0].copy()
+        self.bam = None
+        if world.actuator_model == "bam":
+            from mjlab_microduck.sim.bam import CpuBamController
+
+            names = [model.actuator(index).name for index in self.actuators]
+            self.bam = CpuBamController(
+                model, world.data, names, gain=kp, prefix=self.prefix, seed=index
+            )
+            self.bam.set_torque(not limp)
+        self._last_velocity = np.zeros(len(self.actuators))
+        self._sensor_velocity = self._last_velocity.copy()
+        self._held_backlash = None
 
         # **Held until the daemon takes it.** A biped at a static pose is not stable: holding the
         # home pose with position control alone puts this duck on the ground in under a second, at
@@ -262,7 +390,9 @@ class Body:
 
     # ── placement ─────────────────────────────────────────────────────────
 
-    def place(self, pose: dict[str, float] | None, trunk_z: float, offset_y: float) -> None:
+    def place(
+        self, pose: dict[str, float] | None, trunk_z: float, offset_y: float
+    ) -> None:
         data = self.world.data
         data.qpos[self.trunk + 0] = 0.0
         data.qpos[self.trunk + 1] = offset_y
@@ -271,11 +401,23 @@ class Body:
         data.qvel[self.trunk_dof : self.trunk_dof + 6] = 0.0
         for slot, wire_index in enumerate(self.to_wire):
             name = JOINT_NAMES[wire_index]
-            value = HOME_POSE[wire_index] if pose is None else pose.get(name, HOME_POSE[wire_index])
+            value = (
+                HOME_POSE[wire_index]
+                if pose is None
+                else pose.get(name, HOME_POSE[wire_index])
+            )
             data.qpos[self.qpos_adr[slot]] = value
             data.qvel[self.qvel_adr[slot]] = 0.0
+        if self.bam is not None:
+            mask = self.bam._backlash_mask
+            data.qpos[self.bam.backlash_qpos[mask]] = 0.0
+            data.qvel[self.bam.backlash_dof[mask]] = 0.0
+            self._last_velocity[:] = 0.0
+            self._sensor_velocity[:] = 0.0
         data.ctrl[self.actuator_slice] = data.qpos[self.qpos_adr]
         self._apply_torque()
+        if self.bam is not None:
+            self.bam.reset()
         self.remember()
 
     def remember(self) -> None:
@@ -284,6 +426,8 @@ class Body:
             data.qpos[self.trunk : self.trunk + 7].copy(),
             data.qpos[self.qpos_adr].copy(),
         )
+        if self.bam is not None:
+            self._held_backlash = data.qpos[self.bam.backlash_qpos].copy()
 
     def restore(self) -> None:
         """Put this duck back where it was, for the one that has not been enabled yet."""
@@ -295,6 +439,16 @@ class Body:
         data.qpos[self.qpos_adr] = joints
         data.qvel[self.trunk_dof : self.trunk_dof + 6] = 0.0
         data.qvel[self.qvel_adr] = 0.0
+        if self.bam is not None:
+            mask = self.bam._backlash_mask
+            data.qpos[self.bam.backlash_qpos[mask]] = self._held_backlash[mask]
+            data.qvel[self.bam.backlash_dof[mask]] = 0.0
+
+    def sample_velocity(self) -> None:
+        """Clock the training's one-control-tick encoder-velocity delay, never on read()."""
+        if self.bam is not None:
+            self._sensor_velocity = self._last_velocity.copy()
+            self._last_velocity = self.bam.encoder_velocities().copy()
 
     # ── what the daemon sees ──────────────────────────────────────────────
 
@@ -302,8 +456,16 @@ class Body:
         data = self.world.data
         with self.world.lock:
             sim_time = float(data.time)
-            positions = data.qpos[self.qpos_adr].copy()
-            velocities = data.qvel[self.qvel_adr].copy()
+            positions = (
+                self.bam.encoder_positions()
+                if self.bam is not None
+                else data.qpos[self.qpos_adr]
+            ).copy()
+            velocities = (
+                self._sensor_velocity
+                if self.bam is not None
+                else data.qvel[self.qvel_adr]
+            ).copy()
             force = data.actuator_force[self.actuator_slice].copy()
             quat = data.qpos[self.trunk + 3 : self.trunk + 7].copy()
             gyro = data.qvel[self.trunk_dof + 3 : self.trunk_dof + 6].copy()
@@ -353,14 +515,24 @@ class Body:
         """
         with self.world.lock:
             distance_mm, status = self.tof.frame(self.world.data)
-        return {"rows": ROWS, "cols": COLS, "distance_mm": distance_mm, "status": status}
+        return {
+            "rows": ROWS,
+            "cols": COLS,
+            "distance_mm": distance_mm,
+            "status": status,
+        }
 
     # ── what the daemon commands ──────────────────────────────────────────
 
     def set_targets(self, wire_targets: list[float]) -> None:
         if len(wire_targets) != len(JOINT_NAMES):
-            raise ValueError(f"expected {len(JOINT_NAMES)} targets, got {len(wire_targets)}")
+            raise ValueError(
+                f"expected {len(JOINT_NAMES)} targets, got {len(wire_targets)}"
+            )
         with self.world.lock:
+            if self.bam is not None:
+                self.bam.set_targets([wire_targets[index] for index in self.to_wire])
+                return
             for slot, wire_index in enumerate(self.to_wire):
                 self.world.data.ctrl[self.actuators[slot]] = wire_targets[wire_index]
 
@@ -372,10 +544,17 @@ class Body:
     def set_torque(self, on: bool) -> None:
         with self.world.lock:
             self.torque_on = bool(on)
+            if self.bam is not None:
+                if on:
+                    self.bam.reset()
+                self.bam.set_torque(on)
             if on:
                 self.released = True
                 # Torque arriving must not fling the robot at a stale target.
-                self.world.data.ctrl[self.actuator_slice] = self.world.data.qpos[self.qpos_adr]
+                if self.bam is None:
+                    self.world.data.ctrl[self.actuator_slice] = self.world.data.qpos[
+                        self.qpos_adr
+                    ]
             self._apply_torque()
 
     def _apply_torque(self) -> None:
@@ -386,6 +565,9 @@ class Body:
         The daemon's kp is a Dynamixel register value whose 200 is what BAM fitted the model's own
         gain to, so it is a ratio against 200 rather than a number in the same units.
         """
+        if self.bam is not None:
+            self.bam.set_gain(self.kp)
+            return
         scale = (self.kp / 200.0) if self.torque_on else 0.0
         model = self.world.model
         model.actuator_gainprm[self.actuator_slice, 0] = self._gain * scale
@@ -398,7 +580,10 @@ class Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         body: Body = self.server.body
-        print(f"== duck {body.index}: daemon connected from {self.client_address}", flush=True)
+        print(
+            f"== duck {body.index}: daemon connected from {self.client_address}",
+            flush=True,
+        )
         visualization: VisualizationService = self.server.visualization
         visualization_client = False
         try:
@@ -459,7 +644,9 @@ class Server(socketserver.ThreadingTCPServer):
         super().__init__(*args, **kwargs)
 
 
-def run(world: World, headless: bool, stop_event: threading.Event | None = None) -> None:
+def run(
+    world: World, headless: bool, stop_event: threading.Event | None = None
+) -> None:
     """Step in real time.
 
     **Real time, not as fast as possible.** The daemon's loop is wall-clock and its health gate
@@ -529,9 +716,19 @@ def run(world: World, headless: bool, stop_event: threading.Event | None = None)
 def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--scene", type=Path, default=DEFAULT_SCENE)
-    parser.add_argument("--ducks", type=int, default=1, help="how many, sharing one world")
+    parser.add_argument(
+        "--ducks", type=int, default=1, help="how many, sharing one world"
+    )
+    parser.add_argument(
+        "--actuator-model",
+        choices=("xml", "bam"),
+        default="xml",
+        help="legacy XML PD or training-matched BAM; use scene_velstand.xml for v8 backlash",
+    )
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=7801, help="the first duck's port; +1 each")
+    parser.add_argument(
+        "--port", type=int, default=7801, help="the first duck's port; +1 each"
+    )
     parser.add_argument("--headless", action="store_true", help="no viewer window")
     add_visualization_arguments(parser)
     parser.add_argument(
@@ -541,7 +738,9 @@ def main() -> None:
         "rendered frame costs 12 ms and four cameras is most of a core; four ducks without them is "
         "nothing. Each becomes a frame port at --frame-port + its index",
     )
-    parser.add_argument("--frame-port", type=int, default=7901, help="the first camera's port")
+    parser.add_argument(
+        "--frame-port", type=int, default=7901, help="the first camera's port"
+    )
     parser.add_argument("--camera-fps", type=int, default=CAMERA_FPS)
     parser.add_argument(
         "--limp",
@@ -566,13 +765,15 @@ def main() -> None:
     if args.ducks < 1:
         raise SystemExit("--ducks needs at least one duck")
 
-    world = World(args.scene, args.ducks)
+    world = World(args.scene, args.ducks, actuator_model=args.actuator_model)
     pose, trunk_z = pose_table(args.scene, args.keyframe)
     wanted = set()
     if args.cameras.strip() == "all":
         wanted = set(range(args.ducks))
     elif args.cameras.strip():
-        wanted = {ord(c.strip()) - ord("a") for c in args.cameras.split(",") if c.strip()}
+        wanted = {
+            ord(c.strip()) - ord("a") for c in args.cameras.split(",") if c.strip()
+        }
     servers = []
     body_servers = []
     for index in range(args.ducks):
@@ -607,10 +808,20 @@ def main() -> None:
     for server in servers:
         threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    print(f"== {args.scene.name}: {args.ducks} duck(s), starting at {args.keyframe}", flush=True)
+    print(
+        f"== {args.scene.name}: {args.ducks} duck(s), starting at {args.keyframe}",
+        flush=True,
+    )
     for index in range(args.ducks):
-        eye = f" · camera on {args.host}:{args.frame_port + index}" if index in wanted else ""
-        print(f"==   duck {index}: robotd --sim {args.host}:{args.port + index}{eye}", flush=True)
+        eye = (
+            f" · camera on {args.host}:{args.frame_port + index}"
+            if index in wanted
+            else ""
+        )
+        print(
+            f"==   duck {index}: robotd --sim {args.host}:{args.port + index}{eye}",
+            flush=True,
+        )
 
     try:
         run(world, headless=args.headless, stop_event=visualization.exit_requested)

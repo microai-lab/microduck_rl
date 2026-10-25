@@ -76,6 +76,16 @@ from .microduck_roulade_env_cfg import (
     MicroduckRouladeRlCfg,
 )
 from .backlash import make_backlash_variant
+from .microduck_lateral_env_cfg import make_lateral_cfg, MicroduckLateralRlCfg
+
+# Explicit opt-in fine-tune; published v8 task registrations remain unchanged.
+register_mjlab_task(
+    task_id="Mjlab-Lateral-Flat-Backlash-MicroDuck",
+    env_cfg=make_lateral_cfg(),
+    play_env_cfg=make_lateral_cfg(play=True),
+    rl_cfg=MicroduckLateralRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
 
 # Standard velocity task
 register_mjlab_task(
